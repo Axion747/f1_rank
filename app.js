@@ -2010,7 +2010,7 @@ function App() {
               ${renderPage()}
             </main>
             <footer class="app-footer">
-              F1 RANK 2026 — A casual prediction game for friends. Not affiliated with Formula 1.
+              F1 RANK 2026 — Not affiliated with Formula 1.
             </footer>
           </div>
         <//>
