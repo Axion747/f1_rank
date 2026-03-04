@@ -2,10 +2,10 @@ import React, { useState, useEffect, useCallback, createContext, useContext, use
 import { createRoot } from 'react-dom/client';
 import { createPortal } from 'react-dom';
 import htm from 'htm';
+import { createClient } from '@supabase/supabase-js';
 
 const html = htm.bind(React.createElement);
-const CGI = '__CGI_BIN__';
-const API = `${CGI}/api.py`;
+const supabase = createClient('https://uuygkrlkmgjoxgmvzxmj.supabase.co', 'sb_publishable_b7BH7vMDILpV7xOppEJRrQ_2E-45ojh');
 
 // ===== DATA =====
 
@@ -87,6 +87,72 @@ function getDriverByNumber(num) {
   return DRIVERS.find(d => d.number === num) || null;
 }
 
+// ===== POINTS TABLES =====
+
+const POINTS = [25, 18, 15, 12, 10, 8, 6, 4, 2, 1];
+const SPRINT_POINTS = [8, 7, 6, 5, 4, 3, 2, 1];
+
+// ===== ACCURACY HELPERS =====
+
+function computeAccuracy(userRankings, actualResults) {
+  // userRankings: array of { race_id, position, driver_id, race_type }
+  // actualResults: array of { race_id, position, driver_id, race_type }
+  if (!userRankings.length || !actualResults.length) return null;
+
+  // Build lookup: race_id|race_type|position -> driver_id (actual)
+  const actualMap = {};
+  actualResults.forEach(r => {
+    actualMap[`${r.race_id}|${r.race_type}|${r.position}`] = r.driver_id;
+  });
+
+  // Build lookup: actual race_id|race_type|driver_id -> position
+  const actualDriverPosMap = {};
+  actualResults.forEach(r => {
+    actualDriverPosMap[`${r.race_id}|${r.race_type}|${r.driver_id}`] = r.position;
+  });
+
+  // Find races that have actual results
+  const actualRaceKeys = new Set(actualResults.map(r => `${r.race_id}|${r.race_type}`));
+
+  let totalCorrect = 0;
+  let totalPredictions = 0;
+  let totalPosDiff = 0;
+  let racesWithResults = new Set();
+
+  userRankings.forEach(pred => {
+    const key = `${pred.race_id}|${pred.race_type}`;
+    if (!actualRaceKeys.has(key)) return;
+
+    racesWithResults.add(key);
+    totalPredictions++;
+
+    const actualDriverAtPos = actualMap[`${pred.race_id}|${pred.race_type}|${pred.position}`];
+    if (actualDriverAtPos === pred.driver_id) {
+      totalCorrect++;
+    }
+
+    const actualPos = actualDriverPosMap[`${pred.race_id}|${pred.race_type}|${pred.driver_id}`];
+    if (actualPos !== undefined) {
+      totalPosDiff += Math.abs(pred.position - actualPos);
+    } else {
+      totalPosDiff += 10; // penalty if driver not in actual results
+    }
+  });
+
+  if (totalPredictions === 0) return null;
+
+  const accuracy = Math.round((totalCorrect / totalPredictions) * 100);
+  const position_diff_avg = (totalPosDiff / totalPredictions).toFixed(1);
+
+  return {
+    accuracy,
+    total_correct: totalCorrect,
+    total_predictions: totalPredictions,
+    position_diff_avg,
+    races_with_results: racesWithResults.size
+  };
+}
+
 // ===== CONTEXTS =====
 
 const AuthContext = createContext(null);
@@ -97,25 +163,6 @@ function useToast() { return useContext(ToastContext); }
 
 const ProfileContext = createContext(null);
 function useProfile() { return useContext(ProfileContext); }
-
-// ===== API HELPERS =====
-
-async function apiCall(path, options = {}) {
-  const { method = 'GET', body, token } = options;
-  const headers = { 'Content-Type': 'application/json' };
-  // CGI proxy strips Authorization header, so pass token via query param
-  let url = `${API}${path}`;
-  if (token) {
-    const sep = url.includes('?') ? '&' : '?';
-    url += `${sep}_token=${encodeURIComponent(token)}`;
-  }
-  const fetchOpts = { method, headers };
-  if (body) fetchOpts.body = JSON.stringify(body);
-  const res = await fetch(url, fetchOpts);
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Something went wrong');
-  return data;
-}
 
 // ===== SVG ICONS =====
 
@@ -168,30 +215,10 @@ function FlagIcon() {
   </svg>`;
 }
 
-function RefreshIcon() {
-  return html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-    <polyline points="23 4 23 10 17 10"/>
-    <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
-  </svg>`;
-}
-
 function UserIcon({ size = 16 }) {
   return html`<svg width=${size} height=${size} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
     <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/>
     <circle cx="12" cy="7" r="4"/>
-  </svg>`;
-}
-
-function NewsIcon() {
-  return html`<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style=${{ display: 'inline-block' }}>
-    <path d="M4 22h16a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H8a2 2 0 0 0-2 2v16a2 2 0 0 1-2 2z"/>
-    <path d="M2 6h4"/>
-    <path d="M2 10h4"/>
-    <path d="M2 14h4"/>
-    <path d="M2 18h4"/>
-    <rect x="10" y="6" width="8" height="4" rx="1"/>
-    <path d="M10 14h8"/>
-    <path d="M10 18h5"/>
   </svg>`;
 }
 
@@ -239,7 +266,7 @@ function DriverSelect({ value, onChange, disabledIds = [], placeholder = 'Select
   // Position dropdown when open — with smart flip
   useEffect(() => {
     if (!isOpen || !triggerRef.current) return;
-    const DROPDOWN_HEIGHT = 280; // approximate: 220px list + search + padding
+    const DROPDOWN_HEIGHT = 280;
     function updatePos() {
       const rect = triggerRef.current.getBoundingClientRect();
       const spaceBelow = window.innerHeight - rect.bottom;
@@ -649,9 +676,9 @@ function Navbar({ route }) {
         </div>
         
         <div class="navbar-actions">
-          ${auth.user ? html`
+          ${auth.profile ? html`
             <div class="navbar-user">
-              <span class="navbar-username" onClick=${() => openProfile(auth.user.username)}>${auth.user.display_name || auth.user.username}</span>
+              <span class="navbar-username" onClick=${() => openProfile(auth.profile.username)}>${auth.profile.display_name || auth.profile.username}</span>
               <button class="btn btn-ghost btn-sm" onClick=${auth.logout}>Logout</button>
             </div>
           ` : html`
@@ -676,11 +703,11 @@ function Navbar({ route }) {
           </button>
         `)}
         <div style=${{ marginTop: 'auto', paddingTop: 'var(--space-6)' }}>
-          ${auth.user ? html`
+          ${auth.profile ? html`
             <div style=${{ padding: 'var(--space-3) var(--space-4)', color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)' }}>
-              Logged in as <strong style=${{ color: 'var(--color-text)' }}>${auth.user.display_name || auth.user.username}</strong>
+              Logged in as <strong style=${{ color: 'var(--color-text)' }}>${auth.profile.display_name || auth.profile.username}</strong>
             </div>
-            <button class="mobile-nav-link" onClick=${() => { openProfile(auth.user.username); setMobileOpen(false); }}>My Profile</button>
+            <button class="mobile-nav-link" onClick=${() => { openProfile(auth.profile.username); setMobileOpen(false); }}>My Profile</button>
             <button class="mobile-nav-link" onClick=${() => { auth.logout(); setMobileOpen(false); }}>Logout</button>
           ` : html`
             <button class="btn btn-primary" style=${{ width: '100%' }} onClick=${() => { setShowAuth(true); setMobileOpen(false); }}>Sign In</button>
@@ -699,6 +726,7 @@ function AuthModal({ onClose }) {
   const auth = useAuth();
   const showToast = useToast();
   const [mode, setMode] = useState('login');
+  const [email, setEmail] = useState('');
   const [username, setUsername] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [password, setPassword] = useState('');
@@ -707,22 +735,35 @@ function AuthModal({ onClose }) {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!username.trim() || !password.trim()) {
-      setError('Please fill in both fields');
+    if (!email.trim() || !password.trim()) {
+      setError('Please fill in email and password');
+      return;
+    }
+    if (mode === 'register' && !username.trim()) {
+      setError('Please pick a username');
       return;
     }
     setLoading(true);
     setError('');
     try {
-      const endpoint = mode === 'login' ? '/login' : '/register';
-      const body = { username: username.trim(), password };
-      if (mode === 'register' && displayName.trim()) {
-        body.display_name = displayName.trim();
+      if (mode === 'login') {
+        const { data, error: authErr } = await supabase.auth.signInWithPassword({
+          email: email.trim(),
+          password: password
+        });
+        if (authErr) throw authErr;
+        showToast(`Welcome back!`);
+        onClose();
+      } else {
+        const { data, error: authErr } = await supabase.auth.signUp({
+          email: email.trim(),
+          password: password,
+          options: { data: { username: username.trim(), display_name: displayName.trim() || username.trim() } }
+        });
+        if (authErr) throw authErr;
+        showToast(`Account created! Welcome, ${displayName.trim() || username.trim()}!`);
+        onClose();
       }
-      const data = await apiCall(endpoint, { method: 'POST', body });
-      auth.login(data.token, data.username, data.display_name);
-      showToast(mode === 'login' ? `Welcome back, ${data.display_name || data.username}!` : `Account created! Welcome, ${data.display_name || data.username}!`);
-      onClose();
     } catch (err) {
       setError(err.message);
     } finally {
@@ -745,12 +786,18 @@ function AuthModal({ onClose }) {
         
         <form onSubmit=${handleSubmit}>
           <div class="form-group">
-            <label class="form-label">Username</label>
-            <input class="form-input" type="text" placeholder="Pick a username" 
-              value=${username} onInput=${(e) => setUsername(e.target.value)} 
-              autoFocus autocomplete="username" />
+            <label class="form-label">Email</label>
+            <input class="form-input" type="email" placeholder="you@example.com" 
+              value=${email} onInput=${(e) => setEmail(e.target.value)} 
+              autoFocus autocomplete="email" />
           </div>
           ${mode === 'register' && html`
+            <div class="form-group">
+              <label class="form-label">Username</label>
+              <input class="form-input" type="text" placeholder="Pick a username" 
+                value=${username} onInput=${(e) => setUsername(e.target.value)} 
+                autocomplete="username" />
+            </div>
             <div class="form-group">
               <label class="form-label">Display Name <span style=${{ fontWeight: 400, opacity: 0.6 }}>(optional)</span></label>
               <input class="form-input" type="text" placeholder="How you want to be shown" 
@@ -793,21 +840,44 @@ function ProfileModal({ username, onClose }) {
   const [editing, setEditing] = useState(false);
   const [editData, setEditData] = useState({});
   const [saving, setSaving] = useState(false);
+  const [accuracyData, setAccuracyData] = useState(null);
+  const [racesRanked, setRacesRanked] = useState(0);
 
-  const isOwnProfile = auth.user && auth.user.username === username;
+  const isOwnProfile = auth.session && auth.profile && auth.profile.username === username;
 
   useEffect(() => {
     async function loadProfile() {
       setLoading(true);
       try {
-        const data = await apiCall(`/profile?username=${encodeURIComponent(username)}`);
-        setProfile(data);
+        // Fetch profile
+        const { data: profileData, error: profileErr } = await supabase.from('profiles')
+          .select('*')
+          .eq('username', username)
+          .single();
+        if (profileErr) throw profileErr;
+        setProfile(profileData);
         setEditData({
-          display_name: data.display_name || '',
-          bio: data.bio || '',
-          favorite_team: data.favorite_team || '',
-          favorite_driver: data.favorite_driver || ''
+          display_name: profileData.display_name || '',
+          bio: profileData.bio || '',
+          favorite_team: profileData.favorite_team || '',
+          favorite_driver: profileData.favorite_driver || ''
         });
+
+        // Fetch user rankings for accuracy
+        const { data: userRankings } = await supabase.from('rankings')
+          .select('race_id, position, driver_id, race_type')
+          .eq('user_id', profileData.id);
+
+        // Count distinct races
+        const raceKeys = new Set((userRankings || []).map(r => `${r.race_id}|${r.race_type}`));
+        setRacesRanked(raceKeys.size);
+
+        // Fetch actual results
+        const { data: actualResults } = await supabase.from('actual_results')
+          .select('race_id, position, driver_id, race_type');
+
+        const acc = computeAccuracy(userRankings || [], actualResults || []);
+        setAccuracyData(acc);
       } catch (e) {
         setProfile(null);
       } finally {
@@ -820,11 +890,15 @@ function ProfileModal({ username, onClose }) {
   const handleSave = async () => {
     setSaving(true);
     try {
-      await apiCall('/profile', {
-        method: 'POST',
-        body: editData,
-        token: auth.token
-      });
+      const { error: updateErr } = await supabase.from('profiles')
+        .update({
+          display_name: editData.display_name,
+          bio: editData.bio,
+          favorite_team: editData.favorite_team,
+          favorite_driver: editData.favorite_driver
+        })
+        .eq('id', auth.session.user.id);
+      if (updateErr) throw updateErr;
       setProfile(prev => ({ ...prev, ...editData }));
       setEditing(false);
       showToast('Profile updated!');
@@ -836,8 +910,7 @@ function ProfileModal({ username, onClose }) {
   };
 
   const teamColor = profile && profile.favorite_team ? getTeam(profile.favorite_team).color : 'var(--color-primary)';
-  const accuracy = profile && profile.accuracy;
-  const hasAccuracy = accuracy && accuracy.accuracy !== null;
+  const hasAccuracy = accuracyData && accuracyData.accuracy !== null;
 
   return html`
     <div class="modal-overlay open" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
@@ -894,27 +967,27 @@ function ProfileModal({ username, onClose }) {
             <div class="profile-display-name">${profile.display_name || profile.username}</div>
             <div class="profile-username">@${profile.username}</div>
             ${profile.bio && html`<div class="profile-bio">${profile.bio}</div>`}
-            ${profile.member_since && html`<div class="profile-member-since">Member since ${new Date(profile.member_since).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}</div>`}
+            ${profile.created_at && html`<div class="profile-member-since">Member since ${new Date(profile.created_at).toLocaleDateString('en-US', { month: 'short', year: 'numeric' })}</div>`}
           </div>
 
           <div class="accuracy-gauge">
             <div class="accuracy-circle" style=${{ borderColor: hasAccuracy ? teamColor : 'var(--color-border)' }}>
-              <span class="accuracy-value">${hasAccuracy ? `${accuracy.accuracy}%` : '—'}</span>
+              <span class="accuracy-value">${hasAccuracy ? `${accuracyData.accuracy}%` : '—'}</span>
             </div>
             <div class="accuracy-label">${hasAccuracy ? 'Prediction Accuracy' : 'No races completed yet'}</div>
           </div>
 
           <div class="profile-stats-grid">
             <div class="profile-stat">
-              <div class="profile-stat-value">${profile.races_ranked || 0}</div>
+              <div class="profile-stat-value">${racesRanked || 0}</div>
               <div class="profile-stat-label">Races Ranked</div>
             </div>
             <div class="profile-stat">
-              <div class="profile-stat-value">${hasAccuracy ? accuracy.total_correct : '—'}</div>
+              <div class="profile-stat-value">${hasAccuracy ? accuracyData.total_correct : '—'}</div>
               <div class="profile-stat-label">Correct Picks</div>
             </div>
             <div class="profile-stat">
-              <div class="profile-stat-value">${hasAccuracy ? accuracy.position_diff_avg : '—'}</div>
+              <div class="profile-stat-value">${hasAccuracy ? accuracyData.position_diff_avg : '—'}</div>
               <div class="profile-stat-label">Avg Pos Diff</div>
             </div>
           </div>
@@ -985,112 +1058,13 @@ function RaceCard({ race, onOpen }) {
   `;
 }
 
-// ===== RANKING MODAL =====
-
-function RankingModal({ race, onClose }) {
-  const auth = useAuth();
-  const showToast = useToast();
-  const [selections, setSelections] = useState(Array(10).fill(''));
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    async function loadExisting() {
-      try {
-        const data = await apiCall(`/rankings/user?race_id=${race.id}`, { token: auth.token });
-        if (data.rankings && data.rankings.length > 0) {
-          const existing = Array(10).fill('');
-          data.rankings.forEach(r => {
-            if (r.position >= 1 && r.position <= 10) {
-              existing[r.position - 1] = String(r.driver_id);
-            }
-          });
-          setSelections(existing);
-        }
-      } catch (e) { /* No existing rankings */ }
-      finally { setLoading(false); }
-    }
-    loadExisting();
-  }, [race.id, auth.token]);
-
-  const handleSelect = (index, value) => {
-    const newSelections = [...selections];
-    newSelections[index] = value;
-    setSelections(newSelections);
-  };
-
-  const selectedIds = selections.filter(Boolean);
-
-  const handleSave = async () => {
-    const rankings = selections
-      .map((driverId, i) => driverId ? { position: i + 1, driver_id: Number(driverId) } : null)
-      .filter(Boolean);
-    if (rankings.length === 0) {
-      showToast('Select at least one driver!', 'error');
-      return;
-    }
-    setSaving(true);
-    try {
-      await apiCall('/rankings', {
-        method: 'POST',
-        body: { race_id: race.id, rankings },
-        token: auth.token
-      });
-      showToast(`Rankings saved for ${race.name}!`);
-      onClose();
-    } catch (err) {
-      showToast(err.message, 'error');
-    } finally { setSaving(false); }
-  };
-
-  return html`
-    <div class="modal-overlay open" onClick=${(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div class="modal-card modal-card-wide">
-        <div class="modal-header">
-          <div>
-            <h2 class="modal-title">${race.name}</h2>
-            <p style=${{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)', marginTop: 'var(--space-1)' }}>
-              ${race.location} · ${race.date} ${race.sprint ? '· Sprint Weekend' : ''}
-            </p>
-          </div>
-          <button class="modal-close" onClick=${onClose} aria-label="Close">
-            <${CloseIcon} />
-          </button>
-        </div>
-        
-        ${loading ? html`<div class="spinner"></div>` : html`
-          <div class="ranking-grid">
-            ${Array.from({ length: 10 }, (_, i) => html`
-              <div class="ranking-row" key=${i}>
-                <span class=${`ranking-position ${i < 3 ? `pos-${i + 1}` : ''}`}>P${i + 1}</span>
-                <${DriverSelect}
-                  value=${selections[i]}
-                  onChange=${(val) => handleSelect(i, val)}
-                  disabledIds=${selectedIds}
-                  placeholder="Select driver..."
-                />
-              </div>
-            `)}
-          </div>
-          <div style=${{ marginTop: 'var(--space-5)', display: 'flex', gap: 'var(--space-3)', justifyContent: 'flex-end' }}>
-            <button class="btn btn-secondary" onClick=${onClose}>Cancel</button>
-            <button class="btn btn-primary" onClick=${handleSave} disabled=${saving}>
-              ${saving ? 'Saving...' : 'Save Rankings'}
-            </button>
-          </div>
-        `}
-      </div>
-    </div>
-  `;
-}
-
 // ===== RACE DETAIL MODAL =====
 
 function RaceDetailModal({ race, onClose }) {
   const auth = useAuth();
   const showToast = useToast();
   const [activeTab, setActiveTab] = useState('predict');
-  const [sprintTab, setSprintTab] = useState('race'); // 'race' or 'sprint'
+  const [sprintTab, setSprintTab] = useState('race');
 
   // Predict tab state
   const [gpSelections, setGpSelections] = useState(Array(10).fill(''));
@@ -1107,25 +1081,35 @@ function RaceDetailModal({ race, onClose }) {
 
   // Load user predictions when predict tab is active and user is logged in
   useEffect(() => {
-    if (activeTab !== 'predict' || !auth.user) return;
+    if (activeTab !== 'predict' || !auth.session) return;
     async function loadPredictions() {
       setLoadingPredictions(true);
       try {
         // Load GP predictions
-        const gpData = await apiCall(`/rankings/user?race_id=${race.id}&race_type=race`, { token: auth.token });
-        if (gpData.rankings && gpData.rankings.length > 0) {
+        const { data: gpData } = await supabase.from('rankings')
+          .select('position, driver_id')
+          .eq('user_id', auth.session.user.id)
+          .eq('race_id', race.id)
+          .eq('race_type', 'race')
+          .order('position');
+        if (gpData && gpData.length > 0) {
           const existing = Array(10).fill('');
-          gpData.rankings.forEach(r => {
+          gpData.forEach(r => {
             if (r.position >= 1 && r.position <= 10) existing[r.position - 1] = String(r.driver_id);
           });
           setGpSelections(existing);
         }
         // Load Sprint predictions if sprint weekend
         if (race.sprint) {
-          const spData = await apiCall(`/rankings/user?race_id=${race.id}&race_type=sprint`, { token: auth.token });
-          if (spData.rankings && spData.rankings.length > 0) {
+          const { data: spData } = await supabase.from('rankings')
+            .select('position, driver_id')
+            .eq('user_id', auth.session.user.id)
+            .eq('race_id', race.id)
+            .eq('race_type', 'sprint')
+            .order('position');
+          if (spData && spData.length > 0) {
             const existing = Array(8).fill('');
-            spData.rankings.forEach(r => {
+            spData.forEach(r => {
               if (r.position >= 1 && r.position <= 8) existing[r.position - 1] = String(r.driver_id);
             });
             setSprintSelections(existing);
@@ -1135,7 +1119,7 @@ function RaceDetailModal({ race, onClose }) {
       finally { setLoadingPredictions(false); }
     }
     loadPredictions();
-  }, [activeTab, auth.user, race.id, auth.token, race.sprint]);
+  }, [activeTab, auth.session, race.id, race.sprint]);
 
   // Load sessions when sessions tab active
   useEffect(() => {
@@ -1143,16 +1127,14 @@ function RaceDetailModal({ race, onClose }) {
     async function loadSessions() {
       setLoadingSessions(true);
       try {
-        // Try 2026 first, then 2025 with matching country
         let data = [];
-        const country = race.location; // e.g. "Melbourne", "Shanghai"
+        const country = race.location;
         try {
           data = await openF1Fetch('sessions', { year: 2026, location: country });
           if (!data || data.length === 0) {
             data = await openF1Fetch('sessions', { year: 2026, meeting_name: race.name.replace(' Grand Prix', '') });
           }
         } catch { data = []; }
-        // Fallback: try 2025 with matching country
         if (!data || data.length === 0) {
           try {
             data = await openF1Fetch('sessions', { year: 2025, location: country });
@@ -1163,7 +1145,6 @@ function RaceDetailModal({ race, onClose }) {
             } catch { data = []; }
           }
         }
-        // Filter out Race/Sprint sessions — keep practice & qualifying only
         const practiceAndQuali = (data || []).filter(s => {
           const name = (s.session_name || s.session_type || '').toLowerCase();
           return name.includes('practice') || name.includes('qualifying') || name.includes('quali');
@@ -1208,11 +1189,24 @@ function RaceDetailModal({ race, onClose }) {
     }
     setSavingPredictions(true);
     try {
-      await apiCall('/rankings', {
-        method: 'POST',
-        body: { race_id: race.id, rankings, race_type: raceType },
-        token: auth.token
-      });
+      // Delete existing predictions for this race/type
+      await supabase.from('rankings')
+        .delete()
+        .eq('user_id', auth.session.user.id)
+        .eq('race_id', race.id)
+        .eq('race_type', raceType);
+
+      // Insert new predictions
+      const { error: insertErr } = await supabase.from('rankings')
+        .insert(rankings.map(r => ({
+          user_id: auth.session.user.id,
+          race_id: race.id,
+          position: r.position,
+          driver_id: r.driver_id,
+          race_type: raceType
+        })));
+      if (insertErr) throw insertErr;
+
       showToast(`${isGP ? 'Grand Prix' : 'Sprint'} predictions saved for ${race.name}!`);
     } catch (err) {
       showToast(err.message, 'error');
@@ -1221,14 +1215,6 @@ function RaceDetailModal({ race, onClose }) {
 
   // Sessions tab helpers
   const SESSION_TYPE_ORDER = ['Practice 1', 'Practice 2', 'Practice 3', 'Sprint Qualifying', 'Qualifying', 'Sprint', 'Race'];
-  const uniqueSessionTypes = sessions.length > 0
-    ? [...new Set(sessions.map(s => s.session_name || s.session_type || 'Session'))]
-        .sort((a, b) => {
-          const ai = SESSION_TYPE_ORDER.indexOf(a);
-          const bi = SESSION_TYPE_ORDER.indexOf(b);
-          return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
-        })
-    : [];
 
   const currentSessionObj = sessionTab ? sessions.find(s => s.session_key === sessionTab) : null;
 
@@ -1255,7 +1241,7 @@ function RaceDetailModal({ race, onClose }) {
     const setSelections = isGP ? setGpSelections : setSprintSelections;
     const selectedIds = selections.filter(Boolean);
 
-    if (!auth.user) {
+    if (!auth.session) {
       return html`
         <div class="rdm-signin-prompt">
           <p class="rdm-signin-prompt-text">Sign in to submit your predictions for this race.</p>
@@ -1430,316 +1416,7 @@ async function openF1Fetch(endpoint, params = {}) {
   return res.json();
 }
 
-// ===== LIVE DATA VIEW =====
-
-function LiveView() {
-  const [sessions, setSessions] = useState([]);
-  const [currentSession, setCurrentSession] = useState(null);
-  const [positions, setPositions] = useState([]);
-  const [laps, setLaps] = useState([]);
-  const [weather, setWeather] = useState([]);
-  const [raceControl, setRaceControl] = useState([]);
-  const [pitStops, setPitStops] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState(null);
-
-  const fetchLiveData = useCallback(async (showRefresh) => {
-    if (showRefresh) setRefreshing(true);
-    else setLoading(true);
-    setError(null);
-
-    try {
-      // Fetch sessions directly from OpenF1
-      let sessData = [];
-      try {
-        sessData = await openF1Fetch('sessions', { year: 2026 });
-      } catch {
-        // If 2026 has no data yet, try latest from 2025 as demo
-        try {
-          sessData = await openF1Fetch('sessions', { year: 2025 });
-        } catch { sessData = []; }
-      }
-      setSessions(sessData);
-
-      if (sessData.length === 0) {
-        setCurrentSession(null);
-        setLoading(false);
-        setRefreshing(false);
-        return;
-      }
-
-      // Use the latest session
-      const latest = sessData[sessData.length - 1];
-      setCurrentSession(latest);
-      const sk = latest.session_key;
-
-      // Fetch additional data in parallel directly from OpenF1
-      const [posRes, lapRes, weatherRes, rcRes, pitRes] = await Promise.allSettled([
-        openF1Fetch('position', { session_key: sk }),
-        openF1Fetch('laps', { session_key: sk }),
-        openF1Fetch('weather', { session_key: sk }),
-        openF1Fetch('race_control', { session_key: sk }),
-        openF1Fetch('pit', { session_key: sk })
-      ]);
-
-      if (posRes.status === 'fulfilled') setPositions(posRes.value || []);
-      if (lapRes.status === 'fulfilled') setLaps(lapRes.value || []);
-      if (weatherRes.status === 'fulfilled') setWeather(weatherRes.value || []);
-      if (rcRes.status === 'fulfilled') setRaceControl(rcRes.value || []);
-      if (pitRes.status === 'fulfilled') setPitStops(pitRes.value || []);
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
-
-  useEffect(() => { fetchLiveData(false); }, [fetchLiveData]);
-
-  // Find next race for empty state
-  const now = new Date();
-  const nextRace = RACES.find(r => {
-    const raceDate = new Date(`${r.date}, 2026`);
-    return raceDate > now;
-  }) || RACES[0];
-
-  if (loading) return html`<div><div class="page-header"><h1 class="page-title">Live Data</h1></div><div class="spinner"></div></div>`;
-
-  if (error) return html`
-    <div>
-      <div class="page-header"><h1 class="page-title">Live Data</h1></div>
-      <div class="empty-state">
-        <h3 class="empty-state-title">Couldn't load live data</h3>
-        <p class="empty-state-text">${error}</p>
-        <button class="btn btn-primary" style=${{ marginTop: 'var(--space-4)' }} onClick=${() => fetchLiveData(false)}>Try Again</button>
-      </div>
-    </div>
-  `;
-
-  if (!currentSession) return html`
-    <div>
-      <div class="page-header"><h1 class="page-title">Live Data</h1></div>
-      <div class="empty-state">
-        <div class="empty-state-icon"><${FlagIcon} /></div>
-        <h3 class="empty-state-title">No live session right now</h3>
-        <p class="empty-state-text">The next race is ${nextRace.name} on ${nextRace.date}.</p>
-      </div>
-    </div>
-  `;
-
-  // Get latest positions (last position entry per driver)
-  const latestPositions = {};
-  positions.forEach(p => {
-    latestPositions[p.driver_number] = p;
-  });
-  const sortedPositions = Object.values(latestPositions).sort((a, b) => (a.position || 99) - (b.position || 99));
-
-  // Get latest laps (last few laps for display)
-  const recentLaps = laps.slice(-30);
-
-  // Fastest lap
-  const validLaps = laps.filter(l => l.lap_duration && l.lap_duration > 0);
-  const fastestLap = validLaps.length > 0 ? validLaps.reduce((f, l) => l.lap_duration < f.lap_duration ? l : f) : null;
-
-  // Latest weather
-  const latestWeather = weather.length > 0 ? weather[weather.length - 1] : null;
-
-  // Recent race control (last 10)
-  const recentRC = raceControl.slice(-10).reverse();
-
-  // Recent pit stops (last 10)
-  const recentPits = pitStops.slice(-10).reverse();
-
-  const isLive = currentSession.status === 'Started' || currentSession.status === 'Active';
-
-  return html`
-    <div>
-      <div class="page-header" style=${{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 'var(--space-3)' }}>
-        <div>
-          <h1 class="page-title">Live Data</h1>
-          <p class="page-subtitle">Latest session info from OpenF1.</p>
-        </div>
-        <button class="btn btn-secondary refresh-btn" onClick=${() => fetchLiveData(true)} disabled=${refreshing}>
-          <${RefreshIcon} />
-          ${refreshing ? 'Refreshing...' : 'Refresh'}
-        </button>
-      </div>
-
-      <div class="session-status-card">
-        <div class="session-info">
-          <div class="session-name">
-            ${isLive && html`<span class="live-dot"></span>`}
-            ${currentSession.session_name || 'Session'} — ${currentSession.location || ''}
-          </div>
-          <div class="session-detail">
-            ${currentSession.circuit_short_name || ''} · ${currentSession.date_start ? currentSession.date_start.slice(0, 10) : ''}
-            ${currentSession.status ? ` · ${currentSession.status}` : ''}
-          </div>
-        </div>
-      </div>
-
-      ${sortedPositions.length > 0 && html`
-        <div class="live-section">
-          <div class="live-section-title">
-            Positions
-          </div>
-          <div class="table-wrapper">
-            <table class="data-table">
-              <thead>
-                <tr>
-                  <th style=${{ width: '50px' }}>Pos</th>
-                  <th>Driver</th>
-                  <th>Number</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${sortedPositions.slice(0, 22).map((p, i) => {
-                  const driver = getDriverByNumber(p.driver_number);
-                  return html`<tr key=${p.driver_number}>
-                    <td class=${`pos-cell ${i < 3 ? `pos-${i + 1}` : ''}`}>${p.position || '—'}</td>
-                    <td>
-                      ${driver ? html`<span class="driver-cell"><${TeamDot} teamId=${driver.team} /> ${driver.name}</span>` : `#${p.driver_number}`}
-                    </td>
-                    <td class="timing-value">${p.driver_number}</td>
-                  </tr>`;
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      `}
-
-      ${fastestLap && html`
-        <div class="live-section">
-          <div class="live-section-title">Fastest Lap</div>
-          <div style=${{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }}>
-            ${(() => {
-              const driver = getDriverByNumber(fastestLap.driver_number);
-              return html`
-                <div>
-                  <div style=${{ fontSize: 'var(--text-sm)', color: 'var(--color-text-muted)' }}>
-                    ${driver ? driver.name : `#${fastestLap.driver_number}`}
-                  </div>
-                  <div class="timing-value sector-fastest" style=${{ fontSize: 'var(--text-lg)', fontWeight: 700 }}>
-                    ${formatLapTime(fastestLap.lap_duration)}
-                  </div>
-                  <div style=${{ fontSize: 'var(--text-xs)', color: 'var(--color-text-faint)', marginTop: 'var(--space-1)' }}>
-                    Lap ${fastestLap.lap_number || '?'}
-                  </div>
-                </div>
-              `;
-            })()}
-          </div>
-        </div>
-      `}
-
-      ${recentLaps.length > 0 && html`
-        <div class="live-section">
-          <div class="live-section-title">Latest Lap Times</div>
-          <div class="table-wrapper">
-            <table class="data-table">
-              <thead>
-                <tr>
-                  <th>Driver</th>
-                  <th>Lap</th>
-                  <th>Time</th>
-                  <th>S1</th>
-                  <th>S2</th>
-                  <th>S3</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${recentLaps.slice(-15).reverse().map((lap, i) => {
-                  const driver = getDriverByNumber(lap.driver_number);
-                  return html`<tr key=${i}>
-                    <td>${driver ? html`<span class="driver-cell"><${TeamDot} teamId=${driver.team} size=${8} /> <span style=${{ fontSize: 'var(--text-xs)' }}>${driver.name.split(' ').pop()}</span></span>` : `#${lap.driver_number}`}</td>
-                    <td class="timing-value">${lap.lap_number || '—'}</td>
-                    <td class="timing-value">${lap.lap_duration ? formatLapTime(lap.lap_duration) : '—'}</td>
-                    <td class="timing-value ${getSectorClass(lap, 'duration_sector_1')}">${lap.duration_sector_1 ? lap.duration_sector_1.toFixed(3) : '—'}</td>
-                    <td class="timing-value ${getSectorClass(lap, 'duration_sector_2')}">${lap.duration_sector_2 ? lap.duration_sector_2.toFixed(3) : '—'}</td>
-                    <td class="timing-value ${getSectorClass(lap, 'duration_sector_3')}">${lap.duration_sector_3 ? lap.duration_sector_3.toFixed(3) : '—'}</td>
-                  </tr>`;
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      `}
-
-      ${recentPits.length > 0 && html`
-        <div class="live-section">
-          <div class="live-section-title">Pit Stops</div>
-          <div class="table-wrapper">
-            <table class="data-table">
-              <thead>
-                <tr>
-                  <th>Driver</th>
-                  <th>Lap</th>
-                  <th>Duration</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${recentPits.map((pit, i) => {
-                  const driver = getDriverByNumber(pit.driver_number);
-                  return html`<tr key=${i}>
-                    <td>${driver ? html`<span class="driver-cell"><${TeamDot} teamId=${driver.team} size=${8} /> ${driver.name}</span>` : `#${pit.driver_number}`}</td>
-                    <td class="timing-value">${pit.lap_number || '—'}</td>
-                    <td class="pit-duration">${pit.pit_duration ? `${pit.pit_duration.toFixed(1)}s` : '—'}</td>
-                  </tr>`;
-                })}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      `}
-
-      ${latestWeather && html`
-        <div class="live-section">
-          <div class="live-section-title">Weather</div>
-          <div class="weather-grid">
-            <div class="weather-item">
-              <div class="weather-item-value">${latestWeather.air_temperature != null ? `${latestWeather.air_temperature}°C` : '—'}</div>
-              <div class="weather-item-label">Air Temp</div>
-            </div>
-            <div class="weather-item">
-              <div class="weather-item-value">${latestWeather.track_temperature != null ? `${latestWeather.track_temperature}°C` : '—'}</div>
-              <div class="weather-item-label">Track Temp</div>
-            </div>
-            <div class="weather-item">
-              <div class="weather-item-value">${latestWeather.humidity != null ? `${latestWeather.humidity}%` : '—'}</div>
-              <div class="weather-item-label">Humidity</div>
-            </div>
-            <div class="weather-item">
-              <div class="weather-item-value">${latestWeather.wind_speed != null ? `${latestWeather.wind_speed} m/s` : '—'}</div>
-              <div class="weather-item-label">Wind</div>
-            </div>
-            <div class="weather-item">
-              <div class="weather-item-value">${latestWeather.rainfall != null ? (latestWeather.rainfall > 0 ? 'Yes' : 'No') : '—'}</div>
-              <div class="weather-item-label">Rain</div>
-            </div>
-            <div class="weather-item">
-              <div class="weather-item-value">${latestWeather.pressure != null ? `${latestWeather.pressure} mbar` : '—'}</div>
-              <div class="weather-item-label">Pressure</div>
-            </div>
-          </div>
-        </div>
-      `}
-
-      ${recentRC.length > 0 && html`
-        <div class="live-section">
-          <div class="live-section-title">Race Control</div>
-          ${recentRC.map((msg, i) => html`
-            <div key=${i} class=${`rc-message ${getRCClass(msg)}`}>
-              ${msg.message || JSON.stringify(msg)}
-            </div>
-          `)}
-        </div>
-      `}
-    </div>
-  `;
-}
+// ===== HELPERS =====
 
 function formatLapTime(seconds) {
   if (!seconds || seconds <= 0) return '—';
@@ -1748,197 +1425,11 @@ function formatLapTime(seconds) {
   return mins > 0 ? `${mins}:${secs.padStart(6, '0')}` : secs;
 }
 
-function getSectorClass(lap, sectorKey) {
-  if (lap.is_pit_out_lap) return '';
-  const val = lap[sectorKey];
-  if (!val) return '';
-  // Simple heuristic: we don't have full session context for purple/green/yellow,
-  // but we can style them with defaults
-  return '';
-}
-
-function getRCClass(msg) {
-  const text = (msg.message || '').toLowerCase();
-  const flag = (msg.flag || '').toLowerCase();
-  if (flag === 'red' || text.includes('red flag')) return 'rc-red';
-  if (flag === 'yellow' || text.includes('yellow') || text.includes('safety car') || text.includes('vsc')) return 'rc-yellow';
-  if (flag === 'green' || text.includes('green') || text.includes('clear')) return 'rc-green';
-  return 'rc-default';
-}
-
-// ===== NEWS VIEW =====
-
-// Parse simple XML tags from RSS text
-function extractXmlTag(xml, tag) {
-  const start = xml.indexOf(`<${tag}>`);
-  const altStart = xml.indexOf(`<${tag} `);
-  const s = start !== -1 ? start : altStart;
-  if (s === -1) return '';
-  const bracketEnd = xml.indexOf('>', s);
-  if (bracketEnd === -1) return '';
-  const contentStart = bracketEnd + 1;
-  const end = xml.indexOf(`</${tag}>`, contentStart);
-  if (end === -1) return '';
-  let content = xml.slice(contentStart, end).trim();
-  if (content.startsWith('<![CDATA[')) {
-    content = content.slice(9);
-    if (content.endsWith(']]>')) content = content.slice(0, -3);
-  }
-  return content;
-}
-
-function NewsView() {
-  const [news, setNews] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-
-  useEffect(() => {
-    async function fetchNews() {
-      const newsItems = [];
-
-      // Strategy 1: Fetch OpenF1 latest sessions as "results news"
-      try {
-        let sessData = [];
-        try {
-          sessData = await openF1Fetch('sessions', { year: 2026 });
-        } catch {
-          try { sessData = await openF1Fetch('sessions', { year: 2025 }); } catch { sessData = []; }
-        }
-        if (sessData && sessData.length > 0) {
-          sessData.slice(-8).reverse().forEach(session => {
-            newsItems.push({
-              title: `${session.session_name || 'Session'} — ${session.location || session.circuit_short_name || ''}`,
-              link: '',
-              description: `${session.session_type || ''} at ${session.circuit_short_name || session.location || ''} on ${(session.date_start || '').slice(0, 10)}`,
-              date: session.date_start || '',
-              source: 'OpenF1'
-            });
-          });
-        }
-      } catch { /* ignore */ }
-
-      // Strategy 2: Fetch F1 RSS via a public CORS proxy
-      try {
-        const rssUrl = 'https://www.formula1.com/content/fom-website/en/latest/all.xml';
-        const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(rssUrl)}`;
-        const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(8000) });
-        if (res.ok) {
-          const rssText = await res.text();
-          const items = rssText.split('<item>');
-          for (let i = 1; i < Math.min(items.length, 16); i++) {
-            const title = extractXmlTag(items[i], 'title');
-            const link = extractXmlTag(items[i], 'link');
-            const description = extractXmlTag(items[i], 'description');
-            const pubDate = extractXmlTag(items[i], 'pubDate');
-            if (title) {
-              newsItems.push({
-                title,
-                link,
-                description: description ? description.slice(0, 200) : '',
-                date: pubDate,
-                source: 'Formula1.com'
-              });
-            }
-          }
-        }
-      } catch { /* CORS proxy timeout or failure — just show OpenF1 data */ }
-
-      // Strategy 3: Fallback — try F1 TV RSS via allorigins
-      if (newsItems.filter(n => n.source !== 'OpenF1').length === 0) {
-        try {
-          const rssUrl2 = 'https://f1tv-rss.vercel.app/api/rss';
-          const proxyUrl2 = `https://api.allorigins.win/raw?url=${encodeURIComponent(rssUrl2)}`;
-          const res2 = await fetch(proxyUrl2, { signal: AbortSignal.timeout(8000) });
-          if (res2.ok) {
-            const rssText2 = await res2.text();
-            const items2 = rssText2.split('<item>');
-            for (let i = 1; i < Math.min(items2.length, 16); i++) {
-              const title = extractXmlTag(items2[i], 'title');
-              const link = extractXmlTag(items2[i], 'link');
-              const description = extractXmlTag(items2[i], 'description');
-              const pubDate = extractXmlTag(items2[i], 'pubDate');
-              if (title) {
-                newsItems.push({ title, link, description: description ? description.slice(0, 200) : '', date: pubDate, source: 'F1 TV' });
-              }
-            }
-          }
-        } catch { /* fallback also failed */ }
-      }
-
-      if (newsItems.length === 0) {
-        setError('No news sources available right now. Try again later.');
-      } else {
-        setNews(newsItems);
-      }
-      setLoading(false);
-    }
-    fetchNews();
-  }, []);
-
-  if (loading) return html`<div><div class="page-header"><h1 class="page-title">F1 News</h1></div><div class="spinner"></div></div>`;
-
-  return html`
-    <div>
-      <div class="page-header">
-        <h1 class="page-title">F1 News</h1>
-        <p class="page-subtitle">Latest from the world of Formula 1.</p>
-      </div>
-
-      ${error ? html`
-        <div class="empty-state">
-          <h3 class="empty-state-title">Couldn't load news</h3>
-          <p class="empty-state-text">${error}</p>
-        </div>
-      ` : news.length === 0 ? html`
-        <div class="empty-state">
-          <div class="empty-state-icon"><${NewsIcon} /></div>
-          <h3 class="empty-state-title">No news yet</h3>
-          <p class="empty-state-text">Check back later for the latest F1 updates.</p>
-        </div>
-      ` : html`
-        <div class="news-grid">
-          ${news.map((item, i) => html`
-            <${NewsCard} key=${i} item=${item} />
-          `)}
-        </div>
-      `}
-    </div>
-  `;
-}
-
-function NewsCard({ item }) {
-  const isF1 = item.source === 'Formula1.com' || item.source === 'F1 TV';
-  const isOpenF1 = item.source === 'OpenF1';
-  const sourceClass = isF1 ? 'f1tv' : isOpenF1 ? 'openf1' : '';
-
-  const formatDate = (dateStr) => {
-    if (!dateStr) return '';
-    try {
-      const d = new Date(dateStr);
-      if (isNaN(d.getTime())) return dateStr;
-      return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-    } catch { return dateStr; }
-  };
-
-  return html`
-    <div class=${`news-card news-card-${sourceClass}`}>
-      <h3 class="news-card-title">
-        ${item.link ? html`<a href=${item.link} target="_blank" rel="noopener noreferrer">${item.title}</a>` : item.title}
-      </h3>
-      ${item.description && html`<p class="news-card-desc">${item.description}</p>`}
-      <div class="news-card-meta">
-        <span class="news-card-date">${formatDate(item.date)}</span>
-        <span class=${`news-source-badge news-source-${sourceClass}`}>${item.source || 'News'}</span>
-      </div>
-    </div>
-  `;
-}
-
 // ===== RANKINGS VIEW =====
 
 function RankingsView() {
   const [selectedRace, setSelectedRace] = useState(RACES[0].id);
-  const [raceType, setRaceType] = useState('race'); // 'race' or 'sprint'
+  const [raceType, setRaceType] = useState('race');
   const [rankings, setRankings] = useState([]);
   const [loading, setLoading] = useState(false);
 
@@ -1953,8 +1444,12 @@ function RankingsView() {
     async function fetchRankings() {
       setLoading(true);
       try {
-        const data = await apiCall(`/rankings?race_id=${selectedRace}&race_type=${raceType}`);
-        setRankings(data.rankings || []);
+        const { data } = await supabase.from('rankings')
+          .select('position, driver_id, user_id, profiles(username, display_name)')
+          .eq('race_id', selectedRace)
+          .eq('race_type', raceType)
+          .order('position');
+        setRankings(data || []);
       } catch (e) { setRankings([]); }
       finally { setLoading(false); }
     }
@@ -1965,9 +1460,11 @@ function RankingsView() {
   const userRankings = {};
   const userDisplayNames = {};
   rankings.forEach(r => {
-    if (!userRankings[r.username]) userRankings[r.username] = {};
-    userRankings[r.username][r.position] = r.driver_id;
-    userDisplayNames[r.username] = r.display_name || r.username;
+    const username = r.profiles?.username || r.user_id;
+    const displayName = r.profiles?.display_name || username;
+    if (!userRankings[username]) userRankings[username] = {};
+    userRankings[username][r.position] = r.driver_id;
+    userDisplayNames[username] = displayName;
   });
   const users = Object.keys(userRankings);
 
@@ -2088,8 +1585,45 @@ function LeaderboardView() {
   useEffect(() => {
     async function fetchLeaderboard() {
       try {
-        const data = await apiCall('/leaderboard');
-        setLeaderboard(data.leaderboard || []);
+        // Fetch all profiles
+        const { data: profiles } = await supabase.from('profiles')
+          .select('id, username, display_name, favorite_team');
+
+        // Fetch all rankings
+        const { data: allRankings } = await supabase.from('rankings')
+          .select('user_id, race_id, position, driver_id, race_type');
+
+        // Fetch all actual results
+        const { data: actualResults } = await supabase.from('actual_results')
+          .select('race_id, position, driver_id, race_type');
+
+        // Build leaderboard
+        const board = (profiles || []).map(profile => {
+          const userRankings = (allRankings || []).filter(r => r.user_id === profile.id);
+          const raceKeys = new Set(userRankings.map(r => `${r.race_id}|${r.race_type}`));
+          const racesRanked = raceKeys.size;
+          const acc = computeAccuracy(userRankings, actualResults || []);
+
+          return {
+            username: profile.username,
+            display_name: profile.display_name,
+            favorite_team: profile.favorite_team,
+            races_ranked: racesRanked,
+            accuracy: acc
+          };
+        }).filter(e => e.races_ranked > 0);
+
+        // Sort: users with accuracy first (by accuracy desc), then users without accuracy (by races_ranked desc)
+        board.sort((a, b) => {
+          const aHas = a.accuracy && a.accuracy.accuracy !== null;
+          const bHas = b.accuracy && b.accuracy.accuracy !== null;
+          if (aHas && bHas) return b.accuracy.accuracy - a.accuracy.accuracy;
+          if (aHas) return -1;
+          if (bHas) return 1;
+          return b.races_ranked - a.races_ranked;
+        });
+
+        setLeaderboard(board);
       } catch (e) { setLeaderboard([]); }
       finally { setLoading(false); }
     }
@@ -2184,8 +1718,37 @@ function ChampionshipsView() {
   useEffect(() => {
     async function fetchChampionships() {
       try {
-        const result = await apiCall('/championships');
-        setData(result);
+        // Fetch all rankings
+        const { data: allRankings } = await supabase.from('rankings')
+          .select('position, driver_id, race_id, user_id, race_type');
+
+        // Compute driver standings
+        const driverPoints = {};
+        (allRankings || []).forEach(r => {
+          const pts = r.race_type === 'sprint'
+            ? (SPRINT_POINTS[r.position - 1] || 0)
+            : (POINTS[r.position - 1] || 0);
+          driverPoints[r.driver_id] = (driverPoints[r.driver_id] || 0) + pts;
+        });
+
+        const drivers = Object.entries(driverPoints)
+          .map(([driver_id, points]) => ({ driver_id: Number(driver_id), points }))
+          .sort((a, b) => b.points - a.points);
+
+        // Compute constructor standings
+        const constructorPoints = {};
+        drivers.forEach(d => {
+          const driver = getDriver(d.driver_id);
+          if (driver) {
+            constructorPoints[driver.team] = (constructorPoints[driver.team] || 0) + d.points;
+          }
+        });
+
+        const constructors = Object.entries(constructorPoints)
+          .map(([team_id, points]) => ({ team_id, points }))
+          .sort((a, b) => b.points - a.points);
+
+        setData({ drivers, constructors });
       } catch (e) {
         setData({ drivers: [], constructors: [] });
       } finally { setLoading(false); }
@@ -2313,26 +1876,54 @@ function useHashRoute() {
 
 function App() {
   const [route, setRoute] = useHashRoute();
-  const [token, setToken] = useState(null);
-  const [user, setUser] = useState(null);
+  const [session, setSession] = useState(null);
+  const [profile, setProfile] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
 
-  const login = useCallback((t, username, display_name) => {
-    setToken(t);
-    setUser({ username, display_name });
+  // Load profile from Supabase
+  const loadProfile = useCallback(async (userId) => {
+    try {
+      const { data } = await supabase.from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single();
+      setProfile(data);
+    } catch {
+      setProfile(null);
+    }
   }, []);
 
-  // Expose login for dev testing
+  // Initialize session and listen for auth changes
   useEffect(() => {
-    window.__devLogin = (t, username, display_name) => login(t, username, display_name);
-    return () => { delete window.__devLogin; };
-  }, [login]);
+    // Get initial session
+    supabase.auth.getSession().then(({ data: { session: s } }) => {
+      setSession(s);
+      if (s) {
+        loadProfile(s.user.id);
+      }
+      setAuthLoading(false);
+    });
 
-  const logout = useCallback(() => {
-    setToken(null);
-    setUser(null);
+    // Listen for auth state changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, s) => {
+      setSession(s);
+      if (s) {
+        loadProfile(s.user.id);
+      } else {
+        setProfile(null);
+      }
+    });
+
+    return () => subscription.unsubscribe();
+  }, [loadProfile]);
+
+  const logout = useCallback(async () => {
+    await supabase.auth.signOut();
+    setSession(null);
+    setProfile(null);
   }, []);
 
-  const authValue = { token, user, login, logout };
+  const authValue = { session, profile, logout, loading: authLoading };
 
   const renderPage = () => {
     const path = route === '/calendar' ? '/' : route;
