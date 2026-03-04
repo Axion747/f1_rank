@@ -644,6 +644,31 @@
   box-shadow: var(--shadow-sm);
 }
 
+/* Scrollable user rankings table */
+.rankings-user-table {
+  max-height: 480px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
+}
+
+.rankings-user-table::-webkit-scrollbar {
+  width: 6px;
+}
+
+.rankings-user-table::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.rankings-user-table::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 3px;
+}
+
+.rankings-user-table .data-table th {
+  background: #1f1f2b;
+}
+
 /* Subtle top inner highlight */
 .table-wrapper::before {
   content: '';
