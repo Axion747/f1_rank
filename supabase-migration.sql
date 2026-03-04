@@ -25,6 +25,11 @@ CREATE TABLE IF NOT EXISTS rankings (
   UNIQUE(user_id, race_id, position, race_type)
 );
 
+-- FK to profiles for PostgREST join support
+ALTER TABLE rankings
+  ADD CONSTRAINT rankings_user_id_profiles_fk
+  FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE;
+
 CREATE INDEX IF NOT EXISTS idx_rankings_user_race ON rankings(user_id, race_id);
 CREATE INDEX IF NOT EXISTS idx_rankings_race ON rankings(race_id);
 CREATE INDEX IF NOT EXISTS idx_rankings_race_type ON rankings(race_id, race_type);

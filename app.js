@@ -676,9 +676,14 @@ function Navbar({ route }) {
         </div>
         
         <div class="navbar-actions">
-          ${auth.profile ? html`
+          ${auth.session && auth.profile ? html`
             <div class="navbar-user">
               <span class="navbar-username" onClick=${() => openProfile(auth.profile.username)}>${auth.profile.display_name || auth.profile.username}</span>
+              <button class="btn btn-ghost btn-sm" onClick=${auth.logout}>Logout</button>
+            </div>
+          ` : auth.session && !auth.profile ? html`
+            <div class="navbar-user">
+              <span class="navbar-username" style=${{ opacity: 0.5 }}>Loading...</span>
               <button class="btn btn-ghost btn-sm" onClick=${auth.logout}>Logout</button>
             </div>
           ` : html`
@@ -703,11 +708,16 @@ function Navbar({ route }) {
           </button>
         `)}
         <div style=${{ marginTop: 'auto', paddingTop: 'var(--space-6)' }}>
-          ${auth.profile ? html`
+          ${auth.session && auth.profile ? html`
             <div style=${{ padding: 'var(--space-3) var(--space-4)', color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)' }}>
               Logged in as <strong style=${{ color: 'var(--color-text)' }}>${auth.profile.display_name || auth.profile.username}</strong>
             </div>
             <button class="mobile-nav-link" onClick=${() => { openProfile(auth.profile.username); setMobileOpen(false); }}>My Profile</button>
+            <button class="mobile-nav-link" onClick=${() => { auth.logout(); setMobileOpen(false); }}>Logout</button>
+          ` : auth.session && !auth.profile ? html`
+            <div style=${{ padding: 'var(--space-3) var(--space-4)', color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)' }}>
+              Loading profile...
+            </div>
             <button class="mobile-nav-link" onClick=${() => { auth.logout(); setMobileOpen(false); }}>Logout</button>
           ` : html`
             <button class="btn btn-primary" style=${{ width: '100%' }} onClick=${() => { setShowAuth(true); setMobileOpen(false); }}>Sign In</button>
@@ -761,7 +771,12 @@ function AuthModal({ onClose }) {
           options: { data: { username: username.trim(), display_name: displayName.trim() || username.trim() } }
         });
         if (authErr) throw authErr;
-        showToast(`Account created! Welcome, ${displayName.trim() || username.trim()}!`);
+        // If email confirmation is required, user won't have a session yet
+        if (data.user && !data.session) {
+          showToast('Account created! Check your email to confirm, then sign in.', 'info');
+        } else {
+          showToast(`Account created! Welcome, ${displayName.trim() || username.trim()}!`);
+        }
         onClose();
       }
     } catch (err) {
@@ -1444,12 +1459,30 @@ function RankingsView() {
     async function fetchRankings() {
       setLoading(true);
       try {
-        const { data } = await supabase.from('rankings')
-          .select('position, driver_id, user_id, profiles(username, display_name)')
+        // Fetch rankings for this race
+        const { data: rankData } = await supabase.from('rankings')
+          .select('position, driver_id, user_id')
           .eq('race_id', selectedRace)
           .eq('race_type', raceType)
           .order('position');
-        setRankings(data || []);
+
+        // Get unique user IDs and fetch their profiles
+        const userIds = [...new Set((rankData || []).map(r => r.user_id))];
+        let profileMap = {};
+        if (userIds.length > 0) {
+          const { data: profiles } = await supabase.from('profiles')
+            .select('id, username, display_name')
+            .in('id', userIds);
+          (profiles || []).forEach(p => { profileMap[p.id] = p; });
+        }
+
+        // Attach profile info to each ranking
+        const enriched = (rankData || []).map(r => ({
+          ...r,
+          _username: profileMap[r.user_id]?.username || r.user_id.slice(0, 8),
+          _display_name: profileMap[r.user_id]?.display_name || profileMap[r.user_id]?.username || 'Unknown'
+        }));
+        setRankings(enriched);
       } catch (e) { setRankings([]); }
       finally { setLoading(false); }
     }
@@ -1460,8 +1493,8 @@ function RankingsView() {
   const userRankings = {};
   const userDisplayNames = {};
   rankings.forEach(r => {
-    const username = r.profiles?.username || r.user_id;
-    const displayName = r.profiles?.display_name || username;
+    const username = r._username;
+    const displayName = r._display_name;
     if (!userRankings[username]) userRankings[username] = {};
     userRankings[username][r.position] = r.driver_id;
     userDisplayNames[username] = displayName;
@@ -1880,15 +1913,45 @@ function App() {
   const [profile, setProfile] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
 
-  // Load profile from Supabase
+  // Load profile from Supabase — auto-create if missing (fallback for trigger failure)
   const loadProfile = useCallback(async (userId) => {
     try {
-      const { data } = await supabase.from('profiles')
+      const { data, error } = await supabase.from('profiles')
         .select('*')
         .eq('id', userId)
         .single();
-      setProfile(data);
-    } catch {
+      if (data) {
+        setProfile(data);
+        return;
+      }
+      // Profile missing — auto-create from user metadata
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) { setProfile(null); return; }
+      const meta = user.user_metadata || {};
+      const username = meta.username || user.email?.split('@')[0] || `user_${userId.slice(0, 8)}`;
+      const display_name = meta.display_name || meta.username || user.email?.split('@')[0] || 'User';
+      const { data: newProfile, error: insertErr } = await supabase.from('profiles')
+        .insert({ id: userId, username, display_name })
+        .select()
+        .single();
+      if (insertErr) {
+        // If insert fails due to duplicate username, try with suffix
+        if (insertErr.message?.includes('duplicate') || insertErr.code === '23505') {
+          const fallbackUsername = `${username}_${userId.slice(0, 6)}`;
+          const { data: retryProfile } = await supabase.from('profiles')
+            .insert({ id: userId, username: fallbackUsername, display_name })
+            .select()
+            .single();
+          setProfile(retryProfile || null);
+        } else {
+          console.error('Profile creation failed:', insertErr);
+          setProfile(null);
+        }
+      } else {
+        setProfile(newProfile);
+      }
+    } catch (e) {
+      console.error('loadProfile error:', e);
       setProfile(null);
     }
   }, []);
@@ -1947,7 +2010,7 @@ function App() {
               ${renderPage()}
             </main>
             <footer class="app-footer">
-              F1 RANK 2026 — Not affiliated with Formula 1.
+              F1 RANK 2026 — A casual prediction game for friends. Not affiliated with Formula 1.
             </footer>
           </div>
         <//>
