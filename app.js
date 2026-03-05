@@ -1504,17 +1504,26 @@ function RankingsView() {
   // Number of positions depends on race type
   const numPositions = raceType === 'sprint' ? 8 : 10;
 
-  // Consensus
+  // Consensus — most popular driver per position, no duplicates
   const consensus = {};
   if (users.length > 0) {
+    const usedDrivers = new Set();
     for (let pos = 1; pos <= numPositions; pos++) {
       const counts = {};
       users.forEach(u => {
         const did = userRankings[u][pos];
         if (did) counts[did] = (counts[did] || 0) + 1;
       });
+      // Sort by vote count descending, pick the top driver not already used
       const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-      if (sorted.length > 0) consensus[pos] = Number(sorted[0][0]);
+      for (const [driverIdStr] of sorted) {
+        const driverId = Number(driverIdStr);
+        if (!usedDrivers.has(driverId)) {
+          consensus[pos] = driverId;
+          usedDrivers.add(driverId);
+          break;
+        }
+      }
     }
   }
 
@@ -2010,7 +2019,7 @@ function App() {
               ${renderPage()}
             </main>
             <footer class="app-footer">
-              F1 RANK 2026 — Not affiliated with Formula 1.
+              F1 RANK 2026 — A casual prediction game for friends. Not affiliated with Formula 1.
             </footer>
           </div>
         <//>
