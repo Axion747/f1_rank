@@ -36,9 +36,9 @@ function RefreshIcon() {
   </svg>`;
 }
 
-function sessionLabel(session) {
-  const raw = (session.session_name || session.session_type || '').replace(/_/g, ' ');
-  return raw.charAt(0).toUpperCase() + raw.slice(1);
+function rawSessionLabel(session) {
+  const raw = (session.session_name || session.session_type || '').replace(/_/g, ' ').trim();
+  return raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : 'Session';
 }
 
 function normalizeText(value) {
@@ -58,8 +58,12 @@ function getSessionType(session) {
   if (raw.includes('practice 1') || raw.includes('fp1')) return 'fp1';
   if (raw.includes('practice 2') || raw.includes('fp2')) return 'fp2';
   if (raw.includes('practice 3') || raw.includes('fp3')) return 'fp3';
-  if (raw.includes('sprint shootout') || raw.includes('sprint qualifying')) {
-    return 'sprint-shootout';
+  if (
+    raw.includes('sprint shootout') ||
+    raw.includes('sprint qualifying') ||
+    raw.includes('sprint qualifier')
+  ) {
+    return 'sprint-qualifier';
   }
   if (raw === 'sprint' || raw.endsWith(' sprint') || raw.includes(' sprint ')) {
     return 'sprint';
@@ -68,6 +72,27 @@ function getSessionType(session) {
   if (raw.includes('race')) return 'race';
 
   return 'other';
+}
+
+function sessionLabel(session) {
+  switch (getSessionType(session)) {
+    case 'fp1':
+      return 'Practice 1';
+    case 'fp2':
+      return 'Practice 2';
+    case 'fp3':
+      return 'Practice 3';
+    case 'sprint-qualifier':
+      return 'Sprint Qualifier';
+    case 'sprint':
+      return 'Sprint';
+    case 'qualifying':
+      return 'Qualifying';
+    case 'race':
+      return 'Race';
+    default:
+      return rawSessionLabel(session);
+  }
 }
 
 function isWeekendSession(session) {
@@ -82,8 +107,8 @@ function sessionShortLabel(session) {
       return 'FP2';
     case 'fp3':
       return 'FP3';
-    case 'sprint-shootout':
-      return 'Sprint Shootout';
+    case 'sprint-qualifier':
+      return 'Sprint Qualifier';
     case 'sprint':
       return 'Sprint';
     case 'qualifying':
@@ -103,7 +128,7 @@ function getSessionOrder(session) {
       return 20;
     case 'fp3':
       return 30;
-    case 'sprint-shootout':
+    case 'sprint-qualifier':
       return 40;
     case 'sprint':
       return 50;
@@ -232,6 +257,18 @@ function getPreferredSession(sessions) {
 
   const liveSession = sessions.find(isLiveSession);
   if (liveSession) return liveSession;
+
+  const latestStartedSession = [...sessions]
+    .filter((session) => {
+      const startsAt = session.date_start ? new Date(session.date_start).getTime() : 0;
+      return startsAt && startsAt <= Date.now();
+    })
+    .sort(
+      (left, right) =>
+        new Date(right.date_start || 0).getTime() -
+        new Date(left.date_start || 0).getTime(),
+    )[0];
+  if (latestStartedSession) return latestStartedSession;
 
   const upcomingSession = sessions
     .filter(
@@ -466,6 +503,27 @@ export function LiveDashboard() {
 
   useEffect(() => {
     if (!selectedSession) return undefined;
+
+    const session = sessions.find(
+      (entry) => String(entry.session_key) === String(selectedSession),
+    );
+    const sessionState = session ? getSessionState(session) : null;
+
+    if (sessionState === 'upcoming' || sessionState === 'scheduled') {
+      setRefreshing(false);
+      setPositions([]);
+      setLaps([]);
+      setIntervals([]);
+      setWeather(null);
+      setRaceControl([]);
+      setStints([]);
+      setDrivers([]);
+      setPits([]);
+      setLastUpdate(null);
+      setDashboardError('');
+      return undefined;
+    }
+
     let cancelled = false;
 
     async function runFetch() {
@@ -496,7 +554,7 @@ export function LiveDashboard() {
     return () => {
       cancelled = true;
     };
-  }, [fetchDashboardData, selectedSession]);
+  }, [fetchDashboardData, selectedSession, sessions]);
 
   useEffect(() => {
     if (selectedSession) return;
@@ -569,12 +627,8 @@ export function LiveDashboard() {
     selectedRaceSessions.find(
       (session) => String(session.session_key) === String(selectedSession),
     ) || null;
-  const isLive = Boolean(
-    currentSession &&
-      currentSession.date_end &&
-      new Date(currentSession.date_end) > new Date() &&
-      !currentSession._archived,
-  );
+  const currentSessionState = currentSession ? getSessionState(currentSession) : null;
+  const isLive = Boolean(currentSessionState === 'live' && !currentSession?._archived);
   const selectedRaceStatus = useMemo(() => {
     if (!selectedRace) return '';
     if (!selectedRaceSessions.length) return 'No published sessions yet';
@@ -609,8 +663,17 @@ export function LiveDashboard() {
       const team = localDriver ? getTeam(localDriver.team) : null;
       map[driver.driver_number] = {
         ...driver,
-        name: driver.full_name || `${driver.first_name || ''} ${driver.last_name || ''}`.trim(),
-        teamColor: driver.team_colour ? `#${driver.team_colour}` : team?.color || '#555',
+        name:
+          driver.full_name ||
+          `${driver.first_name || ''} ${driver.last_name || ''}`.trim() ||
+          driver.broadcast_name ||
+          driver.name_acronym ||
+          `#${driver.driver_number}`,
+        teamName: driver.team_name || team?.name || '',
+        teamColor:
+          driver.team_colour
+            ? `#${String(driver.team_colour).replace(/^#/, '')}`
+            : team?.color || '#555',
       };
     });
     return map;
@@ -681,8 +744,12 @@ export function LiveDashboard() {
           driverNumber: position.driver_number,
           shortName:
             openF1Driver?.name_acronym ||
-            (localDriver ? localDriver.name.split(' ').pop().slice(0, 3).toUpperCase() : `#${position.driver_number}`),
-          teamName: openF1Driver?.team_name || team?.name || '',
+            (openF1Driver?.name
+              ? openF1Driver.name.split(' ').pop().slice(0, 3).toUpperCase()
+              : localDriver
+                ? localDriver.name.split(' ').pop().slice(0, 3).toUpperCase()
+                : `#${position.driver_number}`),
+          teamName: openF1Driver?.teamName || team?.name || '',
           teamColor: openF1Driver?.teamColor || team?.color || '#555',
           gap: interval?.gap_to_leader ?? null,
           interval: interval?.interval ?? null,
@@ -705,7 +772,13 @@ export function LiveDashboard() {
   );
 
   const handleManualRefresh = async () => {
-    if (!selectedSession) return;
+    const session = sessions.find(
+      (entry) => String(entry.session_key) === String(selectedSession),
+    );
+    const sessionState = session ? getSessionState(session) : null;
+    if (!selectedSession || sessionState === 'upcoming' || sessionState === 'scheduled') {
+      return;
+    }
 
     setRefreshing(true);
     try {
@@ -748,7 +821,12 @@ export function LiveDashboard() {
         <button
           class=${`live-dash-refresh-btn ${refreshing ? 'spinning' : ''}`}
           onClick=${handleManualRefresh}
-          disabled=${refreshing || !selectedSession}
+          disabled=${
+            refreshing ||
+            !selectedSession ||
+            currentSessionState === 'upcoming' ||
+            currentSessionState === 'scheduled'
+          }
         >
           <${RefreshIcon} /> Refresh
         </button>
@@ -891,7 +969,11 @@ export function LiveDashboard() {
           ${timingTower.length === 0
             ? html`<${InlineMessage}
                 title="No timing data yet"
-                text="Position data has not been published for this session."
+                text=${
+                  currentSessionState === 'upcoming' || currentSessionState === 'scheduled'
+                    ? 'Timing will appear once this session begins.'
+                    : 'Position data has not been published for this session.'
+                }
               />`
             : html`<table class="timing-tower">
                 <thead>
@@ -964,7 +1046,11 @@ export function LiveDashboard() {
           ${!weather
             ? html`<${InlineMessage}
                 title="No weather data"
-                text="OpenF1 has not published weather updates for this session."
+                text=${
+                  currentSessionState === 'upcoming' || currentSessionState === 'scheduled'
+                    ? 'Weather updates will appear once this session begins.'
+                    : 'OpenF1 has not published weather updates for this session.'
+                }
               />`
             : html`<div class="weather-grid">
                 <div class="weather-stat">
@@ -1040,3 +1126,7 @@ export function LiveDashboard() {
     </div>`}
   </div>`;
 }
+
+
+
+

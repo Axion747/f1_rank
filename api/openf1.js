@@ -18,6 +18,14 @@ const ALLOWED_ENDPOINTS = new Set([
 let cachedToken = null;
 let tokenExpiry = 0;
 
+function formatOpenF1Error(statusCode) {
+  if (statusCode === 401 && (!OPENF1_USERNAME || !OPENF1_PASSWORD)) {
+    return "OpenF1 returned 401. Configure OPENF1_USERNAME and OPENF1_PASSWORD.";
+  }
+
+  return `OpenF1 returned ${statusCode}`;
+}
+
 async function getToken() {
   if (!OPENF1_USERNAME || !OPENF1_PASSWORD) {
     return null;
@@ -86,7 +94,7 @@ module.exports = async function handler(req, res) {
     }
 
     if (!resp.ok) {
-      return res.status(200).json({ error: `OpenF1 returned ${resp.status}`, data: [] });
+      return res.status(200).json({ error: formatOpenF1Error(resp.status), data: [] });
     }
 
     const data = await resp.json();
@@ -95,3 +103,5 @@ module.exports = async function handler(req, res) {
     return res.status(200).json({ error: e.message, data: [] });
   }
 };
+
+

@@ -262,10 +262,10 @@ export const RACES = [
   {
     id: 21,
     round: 21,
-    name: 'São Paulo Grand Prix',
+    name: 'Sao Paulo Grand Prix',
     location: 'Interlagos',
     country_name: 'Brazil',
-    meeting_name: 'São Paulo Grand Prix',
+    meeting_name: 'Sao Paulo Grand Prix',
     meeting_key: null,
     race_date_label: 'Nov 8',
     race_starts_at: '2026-11-08T17:00:00Z',
@@ -347,7 +347,8 @@ export const DRIVERS = [
   { id: 31, number: 31, name: 'Esteban Ocon', team: 'haas' },
   { id: 87, number: 87, name: 'Oliver Bearman', team: 'haas' },
   { id: 5, number: 5, name: 'Gabriel Bortoleto', team: 'audi' },
-  { id: 27, number: 27, name: 'Nico Hülkenberg', team: 'audi' },
-  { id: 11, number: 11, name: 'Sergio Pérez', team: 'cadillac' },
+  { id: 27, number: 27, name: 'Nico Hulkenberg', team: 'audi' },
+  { id: 11, number: 11, name: 'Sergio Perez', team: 'cadillac' },
   { id: 77, number: 77, name: 'Valtteri Bottas', team: 'cadillac' },
 ];
+

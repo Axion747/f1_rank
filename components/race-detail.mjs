@@ -26,6 +26,44 @@ import {
   TeamDot,
 } from './app-components.mjs';
 
+function formatSessionDisplayName(session) {
+  const raw = String(session?.session_name || session?.session_type || 'Session')
+    .replace(/_/g, ' ')
+    .trim();
+
+  if (/sprint shootout|sprint qualifying|sprint qualifier/i.test(raw)) {
+    return 'Sprint Qualifier';
+  }
+
+  return raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : 'Session';
+}
+
+function buildSessionDriverMap(drivers) {
+  const driverMap = new Map();
+
+  (drivers || []).forEach((driver) => {
+    const driverNumber = Number(driver.driver_number);
+    if (!Number.isFinite(driverNumber)) return;
+
+    const fullName =
+      driver.full_name ||
+      `${driver.first_name || ''} ${driver.last_name || ''}`.trim() ||
+      driver.broadcast_name ||
+      driver.name_acronym ||
+      `#${driverNumber}`;
+
+    driverMap.set(driverNumber, {
+      name: fullName,
+      teamName: driver.team_name || '',
+      teamColor: driver.team_colour
+        ? `#${String(driver.team_colour).replace(/^#/, '')}`
+        : '',
+    });
+  });
+
+  return driverMap;
+}
+
 export function RaceDetailModal({ race, onClose, defaultTab = 'predict' }) {
   const auth = useAuth();
   const showToast = useToast();
@@ -45,6 +83,7 @@ export function RaceDetailModal({ race, onClose, defaultTab = 'predict' }) {
   });
   const [sessionKey, setSessionKey] = useState(null);
   const [sessionLaps, setSessionLaps] = useState([]);
+  const [sessionDrivers, setSessionDrivers] = useState([]);
   const [lapsLoading, setLapsLoading] = useState(false);
   const [lapsError, setLapsError] = useState('');
   const [sessionRefreshKey, setSessionRefreshKey] = useState(0);
@@ -59,6 +98,7 @@ export function RaceDetailModal({ race, onClose, defaultTab = 'predict' }) {
     setRaceTypeTab('race');
     setSessionKey(null);
     setSessionLaps([]);
+    setSessionDrivers([]);
     setLapsError('');
   }, [race.id]);
 
@@ -183,12 +223,23 @@ export function RaceDetailModal({ race, onClose, defaultTab = 'predict' }) {
       setLapsLoading(true);
       setLapsError('');
       try {
-        const laps = await openF1Fetch('laps', { session_key: sessionKey });
-        if (!cancelled) setSessionLaps(laps);
-      } catch (loadError) {
-        if (!cancelled) {
+        const [lapsResponse, driversResponse] = await Promise.allSettled([
+          openF1Fetch('laps', { session_key: sessionKey }),
+          openF1Fetch('drivers', { session_key: sessionKey }),
+        ]);
+        if (cancelled) return;
+
+        if (lapsResponse.status === 'fulfilled') {
+          setSessionLaps(lapsResponse.value);
+        } else {
           setSessionLaps([]);
-          setLapsError(loadError.message || 'Lap data is unavailable.');
+          setLapsError(lapsResponse.reason?.message || 'Lap data is unavailable.');
+        }
+
+        if (driversResponse.status === 'fulfilled') {
+          setSessionDrivers(driversResponse.value);
+        } else {
+          setSessionDrivers([]);
         }
       } finally {
         if (!cancelled) setLapsLoading(false);
@@ -203,6 +254,10 @@ export function RaceDetailModal({ race, onClose, defaultTab = 'predict' }) {
 
   const currentSession = sessionsState.sessions.find(
     (session) => String(session.session_key) === String(sessionKey),
+  );
+  const sessionDriverMap = useMemo(
+    () => buildSessionDriverMap(sessionDrivers),
+    [sessionDrivers],
   );
 
   const driverBestLaps = useMemo(() => {
@@ -411,7 +466,7 @@ export function RaceDetailModal({ race, onClose, defaultTab = 'predict' }) {
           class=${`rdm-session-tab ${String(session.session_key) === String(sessionKey) ? 'active' : ''}`}
           onClick=${() => setSessionKey(session.session_key)}
         >
-          ${session.session_name || session.session_type || 'Session'}
+          ${formatSessionDisplayName(session)}
         </button>`)}
       </div>
 
@@ -450,8 +505,16 @@ export function RaceDetailModal({ race, onClose, defaultTab = 'predict' }) {
                   </thead>
                   <tbody>
                     ${driverBestLaps.slice(0, 20).map((entry, index) => {
-                      const driver = getDriverByNumber(entry.driver_number);
-                      const team = driver ? getTeam(driver.team) : null;
+                      const sessionDriver = sessionDriverMap.get(entry.driver_number);
+                      const localDriver = getDriverByNumber(entry.driver_number);
+                      const localTeam = localDriver ? getTeam(localDriver.team) : null;
+                      const teamColor =
+                        sessionDriver?.teamColor ||
+                        localTeam?.color ||
+                        'var(--color-text-muted)';
+                      const teamName = sessionDriver?.teamName || localTeam?.name || '-';
+                      const driverName =
+                        sessionDriver?.name || localDriver?.name || 'Unknown Driver';
                       const gap = fastestTime ? entry.lap_duration - fastestTime : 0;
 
                       return html`<tr key=${entry.driver_number}>
@@ -459,20 +522,27 @@ export function RaceDetailModal({ race, onClose, defaultTab = 'predict' }) {
                           ${index + 1}
                         </td>
                         <td>
-                          ${driver
-                            ? html`<span class="driver-cell">
-                                <${TeamDot} teamId=${driver.team} />
-                                ${driver.name}
-                              </span>`
-                            : `#${entry.driver_number}`}
+                          <span class="driver-cell">
+                            ${localDriver
+                              ? html`<${TeamDot} teamId=${localDriver.team} />`
+                              : html`<span
+                                  class="team-dot"
+                                  style=${{
+                                    backgroundColor: teamColor,
+                                    color: teamColor,
+                                  }}
+                                ></span>`}
+                            <span>${driverName}</span>
+                            <span class="driver-number">#${entry.driver_number}</span>
+                          </span>
                         </td>
                         <td
                           style=${{
-                            color: team ? team.color : 'var(--color-text-muted)',
+                            color: teamColor,
                             fontSize: 'var(--text-xs)',
                           }}
                         >
-                          ${team ? team.name : '-'}
+                          ${teamName}
                         </td>
                         <td class="timing-value" style=${{ textAlign: 'right' }}>
                           ${formatLapTime(entry.lap_duration)}
@@ -580,3 +650,6 @@ export function RaceDetailModal({ race, onClose, defaultTab = 'predict' }) {
     </div>
   </div>`;
 }
+
+
+

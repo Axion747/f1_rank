@@ -12,6 +12,36 @@ const RACE_TICKER_MAP = {
   21: "SAOPGP26", 22: "LASVGP26", 23: "QATGP26", 24: "ABUDGP26"
 };
 
+function toText(value) {
+  if (value === undefined || value === null) return "";
+  return typeof value === "string" ? value : String(value);
+}
+
+function toNumber(value) {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : 0;
+}
+
+function normalizeMarket(market, options = {}) {
+  const includeMeta = Boolean(options.includeMeta);
+  const normalized = {
+    driver: toText(market?.yes_sub_title),
+    team: toText(market?.subtitle).replace(":: ", ""),
+    yes_ask: toNumber(market?.yes_ask),
+    yes_bid: toNumber(market?.yes_bid),
+    last_price: toNumber(market?.last_price),
+    volume: toNumber(market?.volume),
+    volume_24h: toNumber(market?.volume_24h),
+  };
+
+  if (includeMeta) {
+    normalized.ticker = toText(market?.ticker);
+    normalized.status = toText(market?.status);
+  }
+
+  return normalized;
+}
+
 module.exports = async function handler(req, res) {
   // CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -29,17 +59,9 @@ module.exports = async function handler(req, res) {
       if (!response.ok) return res.json({ markets: [], event_ticker: eventTicker, available: false });
       
       const data = await response.json();
-      const markets = (data.markets || []).map(m => ({
-        driver: m.yes_sub_title || "",
-        team: (m.subtitle || "").replace(":: ", ""),
-        yes_ask: m.yes_ask || 0,
-        yes_bid: m.yes_bid || 0,
-        last_price: m.last_price || 0,
-        volume: m.volume || 0,
-        volume_24h: m.volume_24h || 0,
-        ticker: m.ticker || "",
-        status: m.status || ""
-      })).sort((a, b) => b.last_price - a.last_price);
+      const markets = (data.markets || [])
+        .map((market) => normalizeMarket(market, { includeMeta: true }))
+        .sort((a, b) => b.last_price - a.last_price);
 
       return res.json({ markets, event_ticker: eventTicker, available: markets.length > 0 });
     }
@@ -53,14 +75,9 @@ module.exports = async function handler(req, res) {
       if (!response.ok) return res.json({ markets: [], available: false });
       
       const data = await response.json();
-      const markets = (data.markets || []).map(m => ({
-        driver: m.yes_sub_title || "",
-        team: (m.subtitle || "").replace(":: ", ""),
-        yes_ask: m.yes_ask || 0,
-        yes_bid: m.yes_bid || 0,
-        last_price: m.last_price || 0,
-        volume: m.volume || 0
-      })).sort((a, b) => b.last_price - a.last_price);
+      const markets = (data.markets || [])
+        .map((market) => normalizeMarket(market))
+        .sort((a, b) => b.last_price - a.last_price);
 
       return res.json({ markets, available: markets.length > 0 });
     }
@@ -70,13 +87,9 @@ module.exports = async function handler(req, res) {
       if (!response.ok) return res.json({ markets: [], available: false });
       
       const data = await response.json();
-      const markets = (data.markets || []).map(m => ({
-        driver: m.yes_sub_title || "",
-        yes_ask: m.yes_ask || 0,
-        yes_bid: m.yes_bid || 0,
-        last_price: m.last_price || 0,
-        volume: m.volume || 0
-      })).sort((a, b) => b.last_price - a.last_price);
+      const markets = (data.markets || [])
+        .map((market) => normalizeMarket(market))
+        .sort((a, b) => b.last_price - a.last_price);
 
       return res.json({ markets, available: markets.length > 0 });
     }
@@ -86,3 +99,4 @@ module.exports = async function handler(req, res) {
     return res.status(500).json({ markets: [], available: false, error: err.message });
   }
 }
+

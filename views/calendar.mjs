@@ -55,10 +55,9 @@ export function CalendarView() {
     <section class="hero-card">
       <div class="hero-copy">
         <div class="hero-kicker">Private Prediction Pool</div>
-        <h1 class="hero-title">Make each race weekend feel consequential.</h1>
+        <h1 class="hero-title">For Shits and Giggles</h1>
         <p class="hero-subtitle">
-          Pick the top finishers for every 2026 Formula 1 round, compare your calls
-          with your group, and let official results settle the leaderboard.
+          Y'all don't got ball knowledge, but bet anyways. I need better picks to feed my gambling addiction
         </p>
       </div>
 
@@ -131,3 +130,5 @@ export function CalendarView() {
     html`<${RaceDetailModal} race=${activeRace} onClose=${() => setActiveRace(null)} />`}
   </div>`;
 }
+
+

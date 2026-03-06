@@ -36,6 +36,41 @@ function ExternalLinkIcon() {
   </svg>`;
 }
 
+function toText(value, fallback = '') {
+  if (value === undefined || value === null) return fallback;
+  return typeof value === 'string' ? value : String(value);
+}
+
+function toNumber(value, fallback = 0) {
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : fallback;
+}
+
+function normalizeMarket(market) {
+  return {
+    driver: toText(market?.driver),
+    team: toText(market?.team),
+    yes_ask: toNumber(market?.yes_ask),
+    yes_bid: toNumber(market?.yes_bid),
+    last_price: toNumber(market?.last_price),
+    volume: toNumber(market?.volume),
+    volume_24h: toNumber(market?.volume_24h),
+    ticker: toText(market?.ticker),
+    status: toText(market?.status),
+  };
+}
+
+function normalizeOddsResponse(response) {
+  const markets = Array.isArray(response?.markets)
+    ? response.markets.map(normalizeMarket)
+    : [];
+
+  return {
+    markets,
+    available: Boolean(response?.available),
+  };
+}
+
 export function BettingOddsTab({ raceId }) {
   const [loading, setLoading] = useState(true);
   const [oddsTab, setOddsTab] = useState('winner');
@@ -55,11 +90,11 @@ export function BettingOddsTab({ raceId }) {
           kalshiFetch('podium', raceId),
         ]);
         if (cancelled) return;
-        setWinnerData(winnerResponse);
-        setPodiumData(podiumResponse);
+        setWinnerData(normalizeOddsResponse(winnerResponse));
+        setPodiumData(normalizeOddsResponse(podiumResponse));
       } catch (fetchError) {
         if (!cancelled) {
-          setError(fetchError.message || 'Unable to load market data right now.');
+          setError(toText(fetchError?.message, 'Unable to load market data right now.'));
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -222,3 +257,4 @@ export function BettingOddsTab({ raceId }) {
     </div>
   </div>`;
 }
+

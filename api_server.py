@@ -19,6 +19,41 @@ OPENF1_PASSWORD = os.getenv("OPENF1_PASSWORD", "")
 _openf1_token = None
 _openf1_token_expires = 0
 
+
+def format_openf1_error(status_code: int) -> str:
+    if status_code == 401 and (not OPENF1_USERNAME or not OPENF1_PASSWORD):
+        return "OpenF1 returned 401. Configure OPENF1_USERNAME and OPENF1_PASSWORD."
+    return f"OpenF1 returned {status_code}"
+
+
+def to_text(value) -> str:
+    if value is None:
+        return ""
+    return value if isinstance(value, str) else str(value)
+
+
+def to_number(value) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def normalize_kalshi_market(market: dict, include_meta: bool = False) -> dict:
+    normalized = {
+        "driver": to_text(market.get("yes_sub_title")),
+        "team": to_text(market.get("subtitle")).replace(":: ", ""),
+        "yes_ask": to_number(market.get("yes_ask")),
+        "yes_bid": to_number(market.get("yes_bid")),
+        "last_price": to_number(market.get("last_price")),
+        "volume": to_number(market.get("volume")),
+        "volume_24h": to_number(market.get("volume_24h")),
+    }
+    if include_meta:
+        normalized["ticker"] = to_text(market.get("ticker"))
+        normalized["status"] = to_text(market.get("status"))
+    return normalized
+
 # Map our app's race IDs to Kalshi event ticker suffixes
 RACE_TICKER_MAP = {
     1: "AUSGP26", 2: "CHNGP26", 3: "JPNGP26", 4: "BAHGP26",
@@ -89,7 +124,7 @@ async def openf1_request(endpoint: str, params: dict):
                 headers["Authorization"] = f"Bearer {token}"
                 resp = await client.get(url, params=params, headers=headers)
         if resp.status_code != 200:
-            return {"error": f"OpenF1 returned {resp.status_code}", "data": []}
+            return {"error": format_openf1_error(resp.status_code), "data": []}
         return {"data": resp.json()}
     except Exception as e:
         return {"error": str(e), "data": []}
@@ -114,6 +149,15 @@ async def openf1_proxy(endpoint: str, request: Request):
     return await openf1_request(endpoint, params)
 
 
+@app.get("/api/openf1")
+async def openf1_query_proxy(request: Request, endpoint: str = Query(...)):
+    if endpoint not in ALLOWED_ENDPOINTS:
+        raise HTTPException(status_code=400, detail=f"Endpoint '{endpoint}' not allowed")
+    params = dict(request.query_params)
+    params.pop("endpoint", None)
+    return await openf1_request(endpoint, params)
+
+
 # ===== KALSHI ENDPOINTS =====
 
 @app.get("/api/kalshi/race/{race_id}")
@@ -134,20 +178,10 @@ async def get_race_odds(race_id: int):
         if not markets:
             return {"markets": [], "event_ticker": event_ticker, "available": False}
 
-        results = []
-        for m in markets:
-            results.append({
-                "driver": m.get("yes_sub_title", ""),
-                "team": (m.get("subtitle", "") or "").replace(":: ", ""),
-                "yes_ask": m.get("yes_ask", 0),
-                "yes_bid": m.get("yes_bid", 0),
-                "last_price": m.get("last_price", 0),
-                "volume": m.get("volume", 0),
-                "volume_24h": m.get("volume_24h", 0),
-                "ticker": m.get("ticker", ""),
-                "status": m.get("status", ""),
-            })
-
+        results = [
+            normalize_kalshi_market(market, include_meta=True)
+            for market in markets
+        ]
         results.sort(key=lambda x: x["last_price"], reverse=True)
         return {"markets": results, "event_ticker": event_ticker, "available": True}
 
@@ -169,16 +203,7 @@ async def get_championship_odds():
         if not markets:
             return {"markets": [], "available": False}
 
-        results = []
-        for m in markets:
-            results.append({
-                "driver": m.get("yes_sub_title", ""),
-                "yes_ask": m.get("yes_ask", 0),
-                "yes_bid": m.get("yes_bid", 0),
-                "last_price": m.get("last_price", 0),
-                "volume": m.get("volume", 0),
-            })
-
+        results = [normalize_kalshi_market(market) for market in markets]
         results.sort(key=lambda x: x["last_price"], reverse=True)
         return {"markets": results, "available": True}
 
@@ -204,22 +229,26 @@ async def get_podium_odds(race_id: int):
         if not markets:
             return {"markets": [], "available": False}
 
-        results = []
-        for m in markets:
-            results.append({
-                "driver": m.get("yes_sub_title", ""),
-                "team": (m.get("subtitle", "") or "").replace(":: ", ""),
-                "yes_ask": m.get("yes_ask", 0),
-                "yes_bid": m.get("yes_bid", 0),
-                "last_price": m.get("last_price", 0),
-                "volume": m.get("volume", 0),
-            })
-
+        results = [normalize_kalshi_market(market) for market in markets]
         results.sort(key=lambda x: x["last_price"], reverse=True)
         return {"markets": results, "available": True}
 
     except Exception:
         return {"markets": [], "available": False}
+
+
+@app.get("/api/kalshi")
+async def kalshi_proxy(type: str = Query(...), race_id = Query(None)):
+    if type == "race" and race_id is not None:
+        return await get_race_odds(race_id)
+    if type == "podium" and race_id is not None:
+        return await get_podium_odds(race_id)
+    if type == "championship":
+        return await get_championship_odds()
+    raise HTTPException(
+        status_code=400,
+        detail="Use type=race&race_id=1, type=podium&race_id=1, or type=championship",
+    )
 
 
 @app.get("/api/health")
@@ -230,3 +259,7 @@ async def health():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+
+
