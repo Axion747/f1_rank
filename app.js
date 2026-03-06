@@ -1504,28 +1504,31 @@ function RankingsView() {
   // Number of positions depends on race type
   const numPositions = raceType === 'sprint' ? 8 : 10;
 
-  // Consensus — most popular driver per position, no duplicates
-  const consensus = {};
-  if (users.length > 0) {
-    const usedDrivers = new Set();
-    for (let pos = 1; pos <= numPositions; pos++) {
-      const counts = {};
-      users.forEach(u => {
+  // Power Rankings — aggregate F1 points from all users' picks
+  const powerScores = useMemo(() => {
+    if (users.length === 0) return [];
+    const pointsTable = raceType === 'sprint' ? SPRINT_POINTS : POINTS;
+    const driverPts = {};
+    const maxPossible = users.length * pointsTable[0]; // max = all users pick driver at P1
+    users.forEach(u => {
+      for (let pos = 1; pos <= numPositions; pos++) {
         const did = userRankings[u][pos];
-        if (did) counts[did] = (counts[did] || 0) + 1;
-      });
-      // Sort by vote count descending, pick the top driver not already used
-      const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
-      for (const [driverIdStr] of sorted) {
-        const driverId = Number(driverIdStr);
-        if (!usedDrivers.has(driverId)) {
-          consensus[pos] = driverId;
-          usedDrivers.add(driverId);
-          break;
+        if (did) {
+          driverPts[did] = (driverPts[did] || 0) + (pointsTable[pos - 1] || 0);
         }
       }
-    }
-  }
+    });
+    const sorted = Object.entries(driverPts)
+      .map(([driverId, pts]) => ({
+        driverId: Number(driverId),
+        rawPoints: pts,
+        score: Math.round((pts / maxPossible) * 1000)
+      }))
+      .sort((a, b) => b.rawPoints - a.rawPoints);
+    // Normalize: top driver = 1000
+    const topPts = sorted[0]?.rawPoints || 1;
+    return sorted.map(d => ({ ...d, score: Math.round((d.rawPoints / topPts) * 1000) }));
+  }, [users, userRankings, raceType, numPositions]);
 
   return html`
     <div>
@@ -1585,31 +1588,34 @@ function RankingsView() {
           </table>
         </div>
         
-        ${Object.keys(consensus).length > 0 && html`
+        ${powerScores.length > 0 && html`
           <div class="consensus-section">
-            <h3 class="consensus-title">Consensus Ranking${raceType === 'sprint' ? ' — Sprint' : ''}</h3>
-            <div class="table-wrapper">
-              <table class="data-table">
-                <thead>
-                  <tr>
-                    <th style=${{ width: '60px' }}>Pos</th>
-                    <th>Driver</th>
-                    <th>Team</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${Array.from({ length: numPositions }, (_, i) => {
-                    const dId = consensus[i + 1];
-                    const driver = dId ? getDriver(dId) : null;
-                    const team = driver ? getTeam(driver.team) : null;
-                    return html`<tr key=${i}>
-                      <td class=${`pos-cell ${i < 3 ? `pos-${i + 1}` : ''}`}>P${i + 1}</td>
-                      <td>${driver ? html`<span class="driver-cell"><${TeamDot} teamId=${driver.team} /> ${driver.name}</span>` : '—'}</td>
-                      <td style=${{ color: 'var(--color-text-muted)' }}>${team ? team.name : '—'}</td>
-                    </tr>`;
-                  })}
-                </tbody>
-              </table>
+            <h3 class="consensus-title">Power Rankings${raceType === 'sprint' ? ' — Sprint' : ''}</h3>
+            <p style=${{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)', marginBottom: 'var(--space-5)', marginTop: 'calc(-1 * var(--space-2))' }}>
+              Aggregated from ${users.length} ${users.length === 1 ? 'prediction' : 'predictions'} using F1 points (${raceType === 'sprint' ? '8-7-6-5-4-3-2-1' : '25-18-15-12-10-8-6-4-2-1'}). Top driver = 1000.
+            </p>
+            <div class="power-rankings-list">
+              ${powerScores.map((entry, i) => {
+                const driver = getDriver(entry.driverId);
+                const team = driver ? getTeam(driver.team) : null;
+                const barPct = (entry.score / 1000) * 100;
+                return html`
+                  <div key=${entry.driverId} class="power-rank-row">
+                    <div class="power-rank-pos">
+                      <span class=${`power-rank-num ${i < 3 ? `power-top-${i + 1}` : ''}`}>${i + 1}</span>
+                    </div>
+                    <div class="power-rank-driver">
+                      ${team && html`<${TeamDot} teamId=${driver.team} size=${10} />`}
+                      <span class="power-rank-name">${driver ? driver.name : 'Unknown'}</span>
+                      <span class="power-rank-team">${team ? team.name : ''}</span>
+                    </div>
+                    <div class="power-rank-bar-wrapper">
+                      <div class="power-rank-bar" style=${{ width: `${barPct}%`, background: team ? team.color : 'var(--color-primary)' }}></div>
+                    </div>
+                    <div class="power-rank-score">${entry.score}</div>
+                  </div>
+                `;
+              })}
             </div>
           </div>
         `}

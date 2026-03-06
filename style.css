@@ -1092,6 +1092,113 @@
   margin-bottom: var(--space-4);
 }
 
+/* Power Rankings */
+.power-rankings-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.power-rank-row {
+  display: grid;
+  grid-template-columns: 40px 1fr 1fr 60px;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  transition: background 0.15s ease;
+}
+
+.power-rank-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.power-rank-pos {
+  text-align: center;
+}
+
+.power-rank-num {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--text-sm);
+  color: var(--color-text-muted);
+}
+
+.power-top-1 {
+  color: #FFD700;
+}
+
+.power-top-2 {
+  color: #C0C0C0;
+}
+
+.power-top-3 {
+  color: #CD7F32;
+}
+
+.power-rank-driver {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.power-rank-name {
+  font-weight: 600;
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  white-space: nowrap;
+}
+
+.power-rank-team {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.power-rank-bar-wrapper {
+  height: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.power-rank-bar {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+  min-width: 2px;
+}
+
+.power-rank-score {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--text-sm);
+  color: var(--color-text);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 640px) {
+  .power-rank-row {
+    grid-template-columns: 32px 1fr 60px;
+    gap: var(--space-2);
+    padding: var(--space-2) var(--space-3);
+  }
+  
+  .power-rank-bar-wrapper {
+    display: none;
+  }
+  
+  .power-rank-team {
+    display: none;
+  }
+}
+
 /* Card entrance animation — staggered fade */
 @keyframes cardIn {
   from { opacity: 0; transform: translateY(8px); }
