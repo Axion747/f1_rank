@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Proxy server for Kalshi F1 betting + OpenF1 live timing data."""
 
+import os
 import time
 import httpx
 from fastapi import FastAPI, HTTPException, Query
@@ -11,8 +12,8 @@ OPENF1_BASE = "https://api.openf1.org/v1"
 OPENF1_TOKEN_URL = "https://api.openf1.org/token"
 
 # OpenF1 credentials (server-side only)
-OPENF1_USERNAME = "benson.chi.zhang@gmail.com"
-OPENF1_PASSWORD = "Kfvz7gQkchiVwNI9"
+OPENF1_USERNAME = os.getenv("OPENF1_USERNAME", "")
+OPENF1_PASSWORD = os.getenv("OPENF1_PASSWORD", "")
 
 # Token cache
 _openf1_token = None
@@ -44,6 +45,8 @@ client = httpx.AsyncClient(timeout=15.0)
 async def get_openf1_token():
     """Get a valid OpenF1 access token, refreshing if expired."""
     global _openf1_token, _openf1_token_expires
+    if not OPENF1_USERNAME or not OPENF1_PASSWORD:
+        return None
     # Refresh 60s before expiry
     if _openf1_token and time.time() < (_openf1_token_expires - 60):
         return _openf1_token

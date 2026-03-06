@@ -5,8 +5,8 @@
 
 const OPENF1_BASE = "https://api.openf1.org/v1";
 const OPENF1_TOKEN_URL = "https://api.openf1.org/token";
-const OPENF1_USERNAME = "benson.chi.zhang@gmail.com";
-const OPENF1_PASSWORD = "Kfvz7gQkchiVwNI9";
+const OPENF1_USERNAME = process.env.OPENF1_USERNAME || "";
+const OPENF1_PASSWORD = process.env.OPENF1_PASSWORD || "";
 
 const ALLOWED_ENDPOINTS = new Set([
   "sessions", "laps", "car_data", "position", "drivers",
@@ -19,6 +19,9 @@ let cachedToken = null;
 let tokenExpiry = 0;
 
 async function getToken() {
+  if (!OPENF1_USERNAME || !OPENF1_PASSWORD) {
+    return null;
+  }
   if (cachedToken && Date.now() < (tokenExpiry - 60000)) {
     return cachedToken;
   }

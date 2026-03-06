@@ -1,89 +1,6 @@
--- F1 Rank 2026 — Supabase Migration
--- Run this in the Supabase SQL Editor on a fresh project.
-
-CREATE TABLE IF NOT EXISTS profiles (
-  id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-  username TEXT UNIQUE NOT NULL,
-  display_name TEXT DEFAULT '',
-  bio TEXT DEFAULT '',
-  favorite_team TEXT DEFAULT '',
-  favorite_driver TEXT DEFAULT '',
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE IF NOT EXISTS rankings (
-  id BIGSERIAL PRIMARY KEY,
-  user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  race_id INTEGER NOT NULL,
-  position INTEGER NOT NULL CHECK (position >= 1 AND position <= 10),
-  driver_id INTEGER NOT NULL,
-  race_type TEXT NOT NULL DEFAULT 'race' CHECK (race_type IN ('race', 'sprint')),
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(user_id, race_id, position, race_type),
-  UNIQUE(user_id, race_id, driver_id, race_type)
-);
-
-ALTER TABLE rankings
-  ADD CONSTRAINT rankings_user_id_profiles_fk
-  FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE;
-
-CREATE INDEX IF NOT EXISTS idx_rankings_user_race ON rankings(user_id, race_id);
-CREATE INDEX IF NOT EXISTS idx_rankings_race ON rankings(race_id);
-CREATE INDEX IF NOT EXISTS idx_rankings_race_type ON rankings(race_id, race_type);
-
-CREATE TABLE IF NOT EXISTS actual_results (
-  id BIGSERIAL PRIMARY KEY,
-  race_id INTEGER NOT NULL,
-  position INTEGER NOT NULL,
-  driver_id INTEGER NOT NULL,
-  race_type TEXT NOT NULL DEFAULT 'race' CHECK (race_type IN ('race', 'sprint')),
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(race_id, position, race_type),
-  UNIQUE(race_id, driver_id, race_type)
-);
-
-CREATE INDEX IF NOT EXISTS idx_actual_results_race ON actual_results(race_id);
-
-ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
-ALTER TABLE rankings ENABLE ROW LEVEL SECURITY;
-ALTER TABLE actual_results ENABLE ROW LEVEL SECURITY;
-
-CREATE POLICY "Profiles are publicly readable"
-  ON profiles FOR SELECT
-  USING (true);
-
-CREATE POLICY "Users can insert their own profile"
-  ON profiles FOR INSERT
-  WITH CHECK (auth.uid() = id);
-
-CREATE POLICY "Users can update their own profile"
-  ON profiles FOR UPDATE
-  USING (auth.uid() = id);
-
-CREATE POLICY "Rankings are publicly readable"
-  ON rankings FOR SELECT
-  USING (true);
-
-CREATE POLICY "Authenticated users can insert their own rankings"
-  ON rankings FOR INSERT
-  WITH CHECK (auth.uid() = user_id);
-
-CREATE POLICY "Users can update their own rankings"
-  ON rankings FOR UPDATE
-  USING (auth.uid() = user_id);
-
-CREATE POLICY "Users can delete their own rankings"
-  ON rankings FOR DELETE
-  USING (auth.uid() = user_id);
-
-CREATE POLICY "Actual results are publicly readable"
-  ON actual_results FOR SELECT
-  USING (true);
-
-CREATE POLICY "Service role manages actual results"
-  ON actual_results FOR ALL
-  USING (auth.role() = 'service_role')
-  WITH CHECK (auth.role() = 'service_role');
+-- F1 Rank 2026 - Shared RPCs and catalog view
+-- Run this after `supabase-upgrade.sql` on existing projects, or as part of the
+-- fresh setup after the base tables exist.
 
 CREATE OR REPLACE VIEW public.drivers_catalog AS
 SELECT * FROM (
@@ -385,29 +302,8 @@ AS $$
   ORDER BY points DESC, dc.team_id ASC;
 $$;
 
-GRANT SELECT ON profiles TO anon, authenticated;
-GRANT SELECT ON rankings TO anon, authenticated;
-GRANT SELECT ON actual_results TO anon, authenticated;
 GRANT SELECT ON public.drivers_catalog TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.get_leaderboard_summary() TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.get_profile_summary(TEXT) TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.get_driver_championship_summary() TO anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.get_constructor_championship_summary() TO anon, authenticated;
-
-CREATE OR REPLACE FUNCTION public.handle_new_user()
-RETURNS TRIGGER AS $$
-BEGIN
-  INSERT INTO public.profiles (id, username, display_name)
-  VALUES (
-    NEW.id,
-    COALESCE(NEW.raw_user_meta_data->>'username', SPLIT_PART(NEW.email, '@', 1)),
-    COALESCE(NEW.raw_user_meta_data->>'display_name', NEW.raw_user_meta_data->>'username', SPLIT_PART(NEW.email, '@', 1))
-  );
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
-DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
-CREATE TRIGGER on_auth_user_created
-  AFTER INSERT ON auth.users
-  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();

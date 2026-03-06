@@ -3097,3 +3097,325 @@ details[open] .betting-longshots-toggle::before {
     min-width: 48px;
   }
 }
+
+/* ===== AUDIT PASS EXTENSIONS ===== */
+.hero-card {
+  display: grid;
+  gap: var(--space-6);
+  padding: var(--space-8);
+  margin-bottom: var(--space-8);
+  background:
+    linear-gradient(135deg, rgba(225, 6, 0, 0.14), rgba(255, 255, 255, 0.02)),
+    var(--color-surface);
+  border: 1px solid rgba(225, 6, 0, 0.18);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--shadow-md);
+}
+
+.hero-kicker {
+  font-family: var(--font-display);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-primary);
+  margin-bottom: var(--space-2);
+}
+
+.hero-title {
+  font-family: var(--font-display);
+  font-size: var(--text-2xl);
+  margin-bottom: var(--space-3);
+}
+
+.hero-subtitle {
+  color: var(--color-text-muted);
+  font-size: var(--text-base);
+  max-width: 60ch;
+}
+
+.hero-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-4);
+}
+
+.hero-meta-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-4);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+}
+
+.hero-meta-label {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-text-muted);
+}
+
+.hero-meta-value {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  color: var(--color-text);
+}
+
+.hero-meta-note {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.hero-actions {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.page-header--compact {
+  margin-bottom: var(--space-5);
+}
+
+.page-note {
+  margin-bottom: var(--space-5);
+  padding: var(--space-4);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.page-note--warning {
+  border-color: rgba(255, 194, 0, 0.25);
+  background: rgba(255, 194, 0, 0.07);
+  color: #f5d773;
+}
+
+.race-card {
+  text-align: left;
+  width: 100%;
+}
+
+.race-card-badges {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.race-status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.55rem;
+  border-radius: var(--radius-full);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.race-status-open {
+  background: rgba(0, 210, 190, 0.12);
+  color: var(--color-success);
+}
+
+.race-status-locked {
+  background: rgba(255, 194, 0, 0.12);
+  color: #f5d773;
+}
+
+.race-status-completed {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--color-text-muted);
+}
+
+.race-card--featured {
+  border-color: rgba(225, 6, 0, 0.24);
+}
+
+.consensus-copy {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+  margin-bottom: var(--space-4);
+}
+
+.inline-message {
+  padding: var(--space-6);
+  border-radius: var(--radius-lg);
+  border: 1px dashed var(--color-border-strong);
+  background: rgba(255, 255, 255, 0.02);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  align-items: flex-start;
+}
+
+.inline-message-title {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+}
+
+.inline-message-text {
+  color: var(--color-text-muted);
+}
+
+.prediction-lock-card {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  margin-bottom: var(--space-4);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.prediction-lock-title {
+  font-family: var(--font-display);
+  font-size: var(--text-base);
+  font-weight: 700;
+  margin: var(--space-2) 0;
+}
+
+.prediction-lock-copy {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.prediction-status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.15rem 0.5rem;
+  border-radius: var(--radius-full);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.prediction-status-pill.open {
+  background: rgba(0, 210, 190, 0.12);
+  color: var(--color-success);
+}
+
+.prediction-status-pill.locked {
+  background: rgba(225, 6, 0, 0.16);
+  color: #ff8b85;
+}
+
+.prediction-actions {
+  margin-top: var(--space-5);
+  display: flex;
+  gap: var(--space-3);
+  justify-content: flex-end;
+}
+
+.session-source-row {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+
+.session-source-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.3rem 0.7rem;
+  border-radius: var(--radius-full);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border: 1px solid var(--color-border);
+}
+
+.session-source-badge.current {
+  background: rgba(0, 210, 190, 0.1);
+  color: var(--color-success);
+}
+
+.session-source-badge.archived {
+  background: rgba(255, 194, 0, 0.1);
+  color: #f5d773;
+}
+
+.session-source-copy,
+.session-meta {
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.session-meta {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-4);
+}
+
+.ds-clear-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-muted);
+}
+
+.ds-option--highlighted,
+.rs-option--highlighted {
+  background: rgba(225, 6, 0, 0.08);
+  border-color: rgba(225, 6, 0, 0.16);
+}
+
+.ds-option--highlighted .ds-option-name,
+.rs-option--highlighted .rs-option-name {
+  color: var(--color-text);
+}
+
+.nav-link-secondary {
+  opacity: 0.72;
+}
+
+.navbar-username-link {
+  text-decoration: none;
+}
+
+.mobile-menu-footer {
+  margin-top: auto;
+  padding-top: var(--space-6);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.mobile-user-summary {
+  padding: var(--space-3) var(--space-4);
+  color: var(--color-text-muted);
+  font-size: var(--text-sm);
+}
+
+.profile-page-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  padding: var(--space-6);
+}
+
+.profile-editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+@media (max-width: 767px) {
+  .hero-card {
+    padding: var(--space-5);
+  }
+
+  .hero-actions,
+  .prediction-actions {
+    flex-direction: column;
+  }
+}

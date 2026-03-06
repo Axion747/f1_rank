@@ -708,3 +708,56 @@
     display: none;
   }
 }
+
+/* ===== AUDIT PASS EXTENSIONS ===== */
+.live-refresh-group {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.live-refresh-note {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+
+.live-session-select {
+  margin-bottom: var(--space-4);
+}
+
+.live-session-select select {
+  width: 100%;
+  max-width: 420px;
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-2);
+  color: var(--color-text);
+}
+
+.timing-tyre {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.stint-track {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-height: 16px;
+}
+
+.stint-bar {
+  display: inline-flex;
+  height: 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.stint-bar.soft { background: #e10600; }
+.stint-bar.medium { background: #ffd200; }
+.stint-bar.hard { background: #f1f1f1; }
+.stint-bar.intermediate { background: #00d26a; }
+.stint-bar.wet { background: #3671c6; }
