@@ -1777,7 +1777,7 @@ function RankingsView() {
           <div class="consensus-section">
             <h3 class="consensus-title">Power Rankings${raceType === 'sprint' ? ' — Sprint' : ''}</h3>
             <p style=${{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)', marginBottom: 'var(--space-5)', marginTop: 'calc(-1 * var(--space-2))' }}>
-              Aggregated from ${users.length} ${users.length === 1 ? 'prediction' : 'predictions'} using F1 points (${raceType === 'sprint' ? '8-7-6-5-4-3-2-1' : '25-18-15-12-10-8-6-4-2-1'}). Score out of 1000 — a perfect 1000 means every user ranked this driver P1.
+              Aggregated from ${users.length} ${users.length === 1 ? 'prediction' : 'predictions'} using F1 points. Score out of 1000 — a perfect 1000 means every user ranked this driver P1.
             </p>
             <div class="power-rankings-list">
               ${powerScores.map((entry, i) => {
