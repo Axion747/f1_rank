@@ -84,7 +84,8 @@ function normalizeOddsResponse(response) {
 
   return {
     markets,
-    available: response?.available ?? markets.length > 0,
+    available:
+      response?.available === undefined ? markets.length > 0 : Boolean(response.available),
   };
 }
 
@@ -141,8 +142,8 @@ export function BettingOddsTab({ raceId }) {
     />`;
   }
 
-  const winnerAvailable = winnerData.available && winnerData.markets.length > 0;
-  const podiumAvailable = podiumData.available && podiumData.markets.length > 0;
+  const winnerAvailable = Boolean(winnerData.available) && winnerData.markets.length > 0;
+  const podiumAvailable = Boolean(podiumData.available) && podiumData.markets.length > 0;
 
   if (!winnerAvailable && !podiumAvailable) {
     return html`<div class="betting-unavailable">
@@ -162,8 +163,13 @@ export function BettingOddsTab({ raceId }) {
     </div>`;
   }
 
-  const activeMarkets =
-    oddsTab === 'winner' ? winnerData.markets || [] : podiumData.markets || [];
+  const activeMarkets = Array.isArray(
+    oddsTab === 'winner' ? winnerData.markets : podiumData.markets,
+  )
+    ? oddsTab === 'winner'
+      ? winnerData.markets
+      : podiumData.markets
+    : [];
   const significantOdds = activeMarkets.filter(
     (market) => market.last_price > 1 || market.yes_ask > 1 || market.yes_bid > 1,
   );
@@ -256,7 +262,7 @@ export function BettingOddsTab({ raceId }) {
           return html`<div key=${market.ticker || index} class="betting-longshot-row">
             ${team ? html`<${TeamDot} teamId=${driver.team} size=${8} />` : null}
             <span class="betting-longshot-name">${market.driver}</span>
-            <span class="betting-longshot-price"><=1c</span>
+            <span class="betting-longshot-price">1c or less</span>
           </div>`;
         })}
       </div>
