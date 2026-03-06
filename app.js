@@ -1626,19 +1626,27 @@ async function openF1Fetch(endpoint, params = {}) {
     const res = await fetch(proxyUrl);
     if (res.ok) {
       const body = await res.json();
-      if (body.data) return body.data;
+      // Proxy wraps data in {data: [...]}; extract it
+      if (body && Array.isArray(body.data)) return body.data;
       if (Array.isArray(body)) return body;
+      // If body is an object with error, return empty array
+      if (body && typeof body === 'object' && !Array.isArray(body)) return [];
       return body;
     }
   } catch (e) {
     // Proxy failed, fall back to direct
   }
   // Direct fallback (may fail during live sessions without auth)
-  const qs = Object.entries(params).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
-  const url = `${OPENF1_BASE}/${endpoint}${qs ? '?' + qs : ''}`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`OpenF1 ${endpoint}: ${res.status}`);
-  return res.json();
+  try {
+    const qs = Object.entries(params).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+    const url = `${OPENF1_BASE}/${endpoint}${qs ? '?' + qs : ''}`;
+    const res = await fetch(url);
+    if (!res.ok) return [];
+    const data = await res.json();
+    return Array.isArray(data) ? data : [];
+  } catch (e) {
+    return [];
+  }
 }
 
 // ===== HELPERS =====
@@ -1801,6 +1809,7 @@ function RankingsView() {
             <h3 class="consensus-title">Power Rankings${raceType === 'sprint' ? ' — Sprint' : ''}</h3>
             <p style=${{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)', marginBottom: 'var(--space-5)', marginTop: 'calc(-1 * var(--space-2))' }}>
               Aggregated from ${users.length} ${users.length === 1 ? 'prediction' : 'predictions'}.
+            </p>
             <div class="power-rankings-list">
               ${powerScores.map((entry, i) => {
                 const driver = getDriver(entry.driverId);
@@ -2272,7 +2281,7 @@ function LiveDashboard() {
     return html`
       <div class="live-dashboard">
         <div class="live-dash-empty">
-          <div class="live-dash-empty-icon">&#127950;</div>
+          <div class="live-dash-empty-icon">🏎️</div>
           <div class="live-dash-empty-title">No Sessions Available</div>
           <p class="live-dash-empty-text">
             Session data will appear here once 2026 F1 sessions begin. Check back during a race weekend for live timing data.
@@ -2407,11 +2416,11 @@ function LiveDashboard() {
                       </td>
                       <td class="right">
                         <span class=${`timing-gap ${row.position === 1 ? 'leader' : ''}`}>
-                          ${row.position === 1 ? 'LEADER' : (row.gap != null ? '+' + (typeof row.gap === 'number' ? row.gap.toFixed(3) : row.gap) : '\u2014')}
+                          ${row.position === 1 ? 'LEADER' : (row.gap != null ? '+' + (typeof row.gap === 'number' ? row.gap.toFixed(3) : String(row.gap)) : '\u2014')}
                         </span>
                       </td>
                       <td class="right mono">
-                        ${row.position === 1 ? '\u2014' : (row.interval != null ? '+' + (typeof row.interval === 'number' ? row.interval.toFixed(3) : row.interval) : '\u2014')}
+                        ${row.position === 1 ? '\u2014' : (row.interval != null ? '+' + (typeof row.interval === 'number' ? row.interval.toFixed(3) : String(row.interval)) : '\u2014')}
                       </td>
                       <td class="right mono">
                         <span class=${`lap-time ${row.lapClass}`}>
@@ -2447,32 +2456,32 @@ function LiveDashboard() {
             ` : html`
               <div class="weather-grid">
                 <div class="weather-stat">
-                  <div class="weather-stat-icon">\u{1f321}\ufe0f</div>
+                  <div class="weather-stat-icon">🌡️</div>
                   <div class="weather-stat-value">${weather.air_temperature != null ? weather.air_temperature + '\u00b0' : '\u2014'}</div>
                   <div class="weather-stat-label">Air</div>
                 </div>
                 <div class="weather-stat">
-                  <div class="weather-stat-icon">\u{1f6e3}\ufe0f</div>
+                  <div class="weather-stat-icon">🛣️</div>
                   <div class="weather-stat-value">${weather.track_temperature != null ? weather.track_temperature + '\u00b0' : '\u2014'}</div>
                   <div class="weather-stat-label">Track</div>
                 </div>
                 <div class="weather-stat">
-                  <div class="weather-stat-icon">\u{1f4a8}</div>
+                  <div class="weather-stat-icon">💨</div>
                   <div class="weather-stat-value">${weather.wind_speed != null ? weather.wind_speed + ' km/h' : '\u2014'}</div>
                   <div class="weather-stat-label">Wind</div>
                 </div>
                 <div class="weather-stat">
-                  <div class="weather-stat-icon">\u{1f4a7}</div>
+                  <div class="weather-stat-icon">💧</div>
                   <div class="weather-stat-value">${weather.humidity != null ? weather.humidity + '%' : '\u2014'}</div>
                   <div class="weather-stat-label">Humidity</div>
                 </div>
                 <div class="weather-stat">
-                  <div class="weather-stat-icon">\u{1f327}\ufe0f</div>
+                  <div class="weather-stat-icon">🌧️</div>
                   <div class="weather-stat-value">${weather.rainfall != null ? (weather.rainfall > 0 ? 'Yes' : 'No') : '\u2014'}</div>
                   <div class="weather-stat-label">Rain</div>
                 </div>
                 <div class="weather-stat">
-                  <div class="weather-stat-icon">\u{1f535}</div>
+                  <div class="weather-stat-icon">🔵</div>
                   <div class="weather-stat-value">${weather.pressure != null ? weather.pressure + ' hPa' : '\u2014'}</div>
                   <div class="weather-stat-label">Pressure</div>
                 </div>
