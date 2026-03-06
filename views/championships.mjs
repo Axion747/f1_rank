@@ -62,15 +62,17 @@ function ConstructorsStandings({ constructors }) {
       <tbody>
         ${constructors.map((entry, index) => {
           const team = getTeam(entry.team_id);
+          const teamColor = team?.color || 'var(--color-text-faint)';
+          const teamName = team?.name || entry.team_id || 'Unknown team';
           return html`<tr key=${entry.team_id}>
             <td class=${`pos-cell ${index < 3 ? `pos-${index + 1}` : ''}`}>${index + 1}</td>
             <td>
               <span class="driver-cell">
                 <span
                   class="constructor-color-bar"
-                  style=${{ backgroundColor: team.color }}
+                  style=${{ backgroundColor: teamColor }}
                 ></span>
-                <span style=${{ fontWeight: 600 }}>${team.name}</span>
+                <span style=${{ fontWeight: 600 }}>${teamName}</span>
               </span>
             </td>
             <td class="points-cell" style=${{ textAlign: 'right' }}>${entry.points}</td>

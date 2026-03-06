@@ -6,8 +6,10 @@ import {
   useRef,
   useState,
 } from '../lib/core.mjs';
+import { RACES } from '../data/f1-data.mjs';
 import { openF1Fetch } from '../lib/app-utils.mjs';
 import {
+  formatDateTime,
   formatLapTime,
   formatTimeAgo,
   getDriverByNumber,
@@ -15,6 +17,8 @@ import {
   getTeam,
 } from '../lib/f1-utils.mjs';
 import { InlineMessage, Spinner } from '../components/app-components.mjs';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 function RefreshIcon() {
   return html`<svg
@@ -35,6 +39,237 @@ function RefreshIcon() {
 function sessionLabel(session) {
   const raw = (session.session_name || session.session_type || '').replace(/_/g, ' ');
   return raw.charAt(0).toUpperCase() + raw.slice(1);
+}
+
+function normalizeText(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/\bformula 1\b/g, '')
+    .replace(/\bgrand prix\b/g, 'gp')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function getSessionType(session) {
+  const raw = normalizeText(session.session_name || session.session_type);
+
+  if (raw.includes('practice 1') || raw.includes('fp1')) return 'fp1';
+  if (raw.includes('practice 2') || raw.includes('fp2')) return 'fp2';
+  if (raw.includes('practice 3') || raw.includes('fp3')) return 'fp3';
+  if (raw.includes('sprint shootout') || raw.includes('sprint qualifying')) {
+    return 'sprint-shootout';
+  }
+  if (raw === 'sprint' || raw.endsWith(' sprint') || raw.includes(' sprint ')) {
+    return 'sprint';
+  }
+  if (raw.includes('qualifying') || raw.includes('quali')) return 'qualifying';
+  if (raw.includes('race')) return 'race';
+
+  return 'other';
+}
+
+function isWeekendSession(session) {
+  return getSessionType(session) !== 'other';
+}
+
+function sessionShortLabel(session) {
+  switch (getSessionType(session)) {
+    case 'fp1':
+      return 'FP1';
+    case 'fp2':
+      return 'FP2';
+    case 'fp3':
+      return 'FP3';
+    case 'sprint-shootout':
+      return 'Sprint Shootout';
+    case 'sprint':
+      return 'Sprint';
+    case 'qualifying':
+      return 'Qualifying';
+    case 'race':
+      return 'Race';
+    default:
+      return sessionLabel(session);
+  }
+}
+
+function getSessionOrder(session) {
+  switch (getSessionType(session)) {
+    case 'fp1':
+      return 10;
+    case 'fp2':
+      return 20;
+    case 'fp3':
+      return 30;
+    case 'sprint-shootout':
+      return 40;
+    case 'sprint':
+      return 50;
+    case 'qualifying':
+      return 60;
+    case 'race':
+      return 70;
+    default:
+      return 90;
+  }
+}
+
+function getSessionState(session) {
+  const now = Date.now();
+  const startsAt = session.date_start ? new Date(session.date_start).getTime() : 0;
+  const endsAt = session.date_end ? new Date(session.date_end).getTime() : 0;
+
+  if (startsAt && endsAt && now >= startsAt && now <= endsAt) return 'live';
+  if (startsAt && now < startsAt) return 'upcoming';
+  if (endsAt && now > endsAt) return 'completed';
+  return 'scheduled';
+}
+
+function isLiveSession(session) {
+  return getSessionState(session) === 'live';
+}
+
+function scoreSessionMatch(session, race) {
+  let score = 0;
+
+  if (
+    session.meeting_key &&
+    race.meeting_key &&
+    String(session.meeting_key) === String(race.meeting_key)
+  ) {
+    score += 1000;
+  }
+
+  const sessionMeeting = normalizeText(
+    session.meeting_name || session.meeting_official_name,
+  );
+  const raceMeeting = normalizeText(race.meeting_name || race.name);
+  const sessionLocation = normalizeText(
+    session.location || session.circuit_short_name,
+  );
+  const raceLocation = normalizeText(race.location);
+  const sessionCountry = normalizeText(session.country_name);
+  const raceCountry = normalizeText(race.country_name);
+
+  if (sessionMeeting && raceMeeting) {
+    if (sessionMeeting === raceMeeting) score += 70;
+    else if (
+      sessionMeeting.includes(raceMeeting) ||
+      raceMeeting.includes(sessionMeeting)
+    ) {
+      score += 55;
+    }
+  }
+
+  if (sessionLocation && raceLocation) {
+    if (sessionLocation === raceLocation) score += 50;
+    else if (
+      sessionLocation.includes(raceLocation) ||
+      raceLocation.includes(sessionLocation)
+    ) {
+      score += 35;
+    }
+  }
+
+  if (sessionCountry && raceCountry && sessionCountry === raceCountry) {
+    score += 20;
+  }
+
+  if (session.date_start) {
+    const diffDays =
+      Math.abs(
+        new Date(session.date_start).getTime() -
+          new Date(race.race_starts_at).getTime(),
+      ) / DAY_MS;
+    if (diffDays <= 5) {
+      score += Math.max(0, 60 - diffDays * 12);
+    }
+  }
+
+  return score;
+}
+
+function buildRaceSessionMap(sessions) {
+  const raceSessionMap = new Map(RACES.map((race) => [race.id, []]));
+
+  (sessions || [])
+    .filter(isWeekendSession)
+    .forEach((session) => {
+      let bestRace = null;
+      let bestScore = -1;
+
+      RACES.forEach((race) => {
+        const score = scoreSessionMatch(session, race);
+        if (score > bestScore) {
+          bestScore = score;
+          bestRace = race;
+        }
+      });
+
+      if (bestRace && bestScore >= 50) {
+        raceSessionMap.get(bestRace.id).push(session);
+      }
+    });
+
+  raceSessionMap.forEach((raceSessions) => {
+    raceSessions.sort((left, right) => {
+      const orderDiff = getSessionOrder(left) - getSessionOrder(right);
+      if (orderDiff !== 0) return orderDiff;
+      return (
+        new Date(left.date_start || 0).getTime() -
+        new Date(right.date_start || 0).getTime()
+      );
+    });
+  });
+
+  return raceSessionMap;
+}
+
+function getPreferredSession(sessions) {
+  if (!sessions.length) return null;
+
+  const liveSession = sessions.find(isLiveSession);
+  if (liveSession) return liveSession;
+
+  const upcomingSession = sessions
+    .filter(
+      (session) =>
+        session.date_start && new Date(session.date_start).getTime() > Date.now(),
+    )
+    .sort(
+      (left, right) =>
+        new Date(left.date_start || 0).getTime() -
+        new Date(right.date_start || 0).getTime(),
+    )[0];
+  if (upcomingSession) return upcomingSession;
+
+  return [...sessions].sort(
+    (left, right) =>
+      new Date(right.date_start || 0).getTime() -
+      new Date(left.date_start || 0).getTime(),
+  )[0];
+}
+
+function getDefaultRaceId(raceSessionMap) {
+  const liveRace = RACES.find((race) =>
+    (raceSessionMap.get(race.id) || []).some(isLiveSession),
+  );
+  if (liveRace) return liveRace.id;
+
+  const now = Date.now();
+  const currentOrNextRace = RACES.find(
+    (race) => new Date(race.race_starts_at).getTime() >= now - 3 * DAY_MS,
+  );
+  if (currentOrNextRace) return currentOrNextRace.id;
+
+  const latestRaceWithSessions = [...RACES]
+    .reverse()
+    .find((race) => (raceSessionMap.get(race.id) || []).length > 0);
+  if (latestRaceWithSessions) return latestRaceWithSessions.id;
+
+  return RACES[0]?.id || null;
 }
 
 function StintTimeline({ stints, driverMap, totalLaps }) {
@@ -61,6 +296,11 @@ function StintTimeline({ stints, driverMap, totalLaps }) {
     <tbody>
       ${Object.entries(byDriver).map(([driverNumber, driverStints]) => {
         const driver = driverMap[driverNumber] || getDriverByNumber(Number(driverNumber));
+        const fallbackTeam = getTeam(driver?.team || '');
+        const driverColor =
+          driver?.teamColor ||
+          fallbackTeam?.color ||
+          'var(--color-text-faint)';
         const maxLaps =
           totalLaps || Math.max(...driverStints.map((stint) => stint.lap_end || stint.lap_start || 0));
         return html`<tr key=${driverNumber}>
@@ -68,9 +308,7 @@ function StintTimeline({ stints, driverMap, totalLaps }) {
             <span class="driver-cell">
               <span
                 class="timing-driver-color"
-                style=${{
-                  background: driver?.teamColor || getTeam(driver?.team || '').color,
-                }}
+                style=${{ background: driverColor }}
               ></span>
               ${driver?.name || `#${driverNumber}`}
             </span>
@@ -108,10 +346,12 @@ function StintTimeline({ stints, driverMap, totalLaps }) {
 
 export function LiveDashboard() {
   const [sessions, setSessions] = useState([]);
+  const [selectedRaceId, setSelectedRaceId] = useState(null);
   const [selectedSession, setSelectedSession] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState('');
+  const [loadError, setLoadError] = useState('');
+  const [dashboardError, setDashboardError] = useState('');
   const [lastUpdate, setLastUpdate] = useState(null);
   const [positions, setPositions] = useState([]);
   const [laps, setLaps] = useState([]);
@@ -128,7 +368,7 @@ export function LiveDashboard() {
 
     async function loadSessions() {
       setLoading(true);
-      setError('');
+      setLoadError('');
       try {
         let data = await openF1Fetch('sessions', { year: 2026 });
         let archived = false;
@@ -144,11 +384,10 @@ export function LiveDashboard() {
           session._archived = archived || !String(session.date_start || '').startsWith('2026');
         });
         setSessions(sorted);
-        setSelectedSession(sorted[0]?.session_key || null);
       } catch (loadError) {
         if (!cancelled) {
           setSessions([]);
-          setError(loadError.message || 'Unable to load session data.');
+          setLoadError(loadError.message || 'Unable to load session data.');
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -160,6 +399,27 @@ export function LiveDashboard() {
       cancelled = true;
     };
   }, []);
+
+  const raceSessionMap = useMemo(() => buildRaceSessionMap(sessions), [sessions]);
+  const defaultRaceId = useMemo(
+    () => getDefaultRaceId(raceSessionMap),
+    [raceSessionMap],
+  );
+
+  useEffect(() => {
+    if (!selectedRaceId && defaultRaceId) {
+      setSelectedRaceId(defaultRaceId);
+      return;
+    }
+
+    if (
+      selectedRaceId &&
+      !RACES.some((race) => race.id === selectedRaceId) &&
+      defaultRaceId
+    ) {
+      setSelectedRaceId(defaultRaceId);
+    }
+  }, [defaultRaceId, selectedRaceId]);
 
   const fetchDashboardData = useCallback(async (sessionKey) => {
     if (!sessionKey) return;
@@ -220,9 +480,13 @@ export function LiveDashboard() {
       setPits([]);
       try {
         await fetchDashboardData(selectedSession);
-        if (!cancelled) setError('');
+        if (!cancelled) setDashboardError('');
       } catch (fetchError) {
-        if (!cancelled) setError(fetchError.message || 'Unable to refresh live timing.');
+        if (!cancelled) {
+          setDashboardError(
+            fetchError.message || 'Unable to refresh live timing.',
+          );
+        }
       } finally {
         if (!cancelled) setRefreshing(false);
       }
@@ -233,6 +497,21 @@ export function LiveDashboard() {
       cancelled = true;
     };
   }, [fetchDashboardData, selectedSession]);
+
+  useEffect(() => {
+    if (selectedSession) return;
+
+    setPositions([]);
+    setLaps([]);
+    setIntervals([]);
+    setWeather(null);
+    setRaceControl([]);
+    setStints([]);
+    setDrivers([]);
+    setPits([]);
+    setLastUpdate(null);
+    setDashboardError('');
+  }, [selectedSession]);
 
   useEffect(() => {
     if (!selectedSession) return undefined;
@@ -256,14 +535,71 @@ export function LiveDashboard() {
     };
   }, [fetchDashboardData, selectedSession, sessions]);
 
-  const currentSession = sessions.find(
-    (session) => String(session.session_key) === String(selectedSession),
+  const selectedRace = useMemo(
+    () =>
+      RACES.find((race) => race.id === selectedRaceId) ||
+      RACES.find((race) => race.id === defaultRaceId) ||
+      RACES[0] ||
+      null,
+    [defaultRaceId, selectedRaceId],
   );
+  const selectedRaceSessions = useMemo(
+    () => (selectedRace ? raceSessionMap.get(selectedRace.id) || [] : []),
+    [raceSessionMap, selectedRace],
+  );
+
+  useEffect(() => {
+    if (!selectedRace) return;
+
+    if (!selectedRaceSessions.length) {
+      if (selectedSession !== null) setSelectedSession(null);
+      return;
+    }
+
+    const stillValid = selectedRaceSessions.some(
+      (session) => String(session.session_key) === String(selectedSession),
+    );
+    if (stillValid) return;
+
+    const preferredSession = getPreferredSession(selectedRaceSessions);
+    setSelectedSession(preferredSession?.session_key || null);
+  }, [selectedRace, selectedRaceSessions, selectedSession]);
+
+  const currentSession =
+    selectedRaceSessions.find(
+      (session) => String(session.session_key) === String(selectedSession),
+    ) || null;
   const isLive = Boolean(
     currentSession &&
       currentSession.date_end &&
       new Date(currentSession.date_end) > new Date() &&
       !currentSession._archived,
+  );
+  const selectedRaceStatus = useMemo(() => {
+    if (!selectedRace) return '';
+    if (!selectedRaceSessions.length) return 'No published sessions yet';
+    if (selectedRaceSessions.some(isLiveSession)) return 'Live weekend';
+
+    const nextScheduledSession = selectedRaceSessions.find(
+      (session) => getSessionState(session) === 'upcoming',
+    );
+    if (nextScheduledSession) {
+      return `Next: ${sessionShortLabel(nextScheduledSession)}`;
+    }
+
+    if (selectedRaceSessions.some((session) => session._archived)) {
+      return 'Archived replay available';
+    }
+
+    return 'Weekend data available';
+  }, [selectedRace, selectedRaceSessions]);
+  const selectedRaceHasArchived = selectedRaceSessions.some(
+    (session) => session._archived,
+  );
+  const anyRaceHasSessions = useMemo(
+    () =>
+      RACES.some((race) => (raceSessionMap.get(race.id) || []).length > 0),
+    [raceSessionMap],
   );
 
   const driverMap = useMemo(() => {
@@ -369,43 +705,41 @@ export function LiveDashboard() {
   );
 
   const handleManualRefresh = async () => {
+    if (!selectedSession) return;
+
     setRefreshing(true);
     try {
       await fetchDashboardData(selectedSession);
-      setError('');
+      setDashboardError('');
     } catch (refreshError) {
-      setError(refreshError.message || 'Unable to refresh live timing.');
+      setDashboardError(
+        refreshError.message || 'Unable to refresh live timing.',
+      );
     } finally {
       setRefreshing(false);
     }
   };
 
   if (loading) return html`<${Spinner} />`;
-  if (error && !sessions.length) {
-    return html`<${InlineMessage} title="Live timing unavailable" text=${error} />`;
-  }
-  if (!sessions.length) {
-    return html`<${InlineMessage}
-      title="No sessions available"
-      text="Live timing will appear once OpenF1 publishes the season sessions."
-    />`;
-  }
 
   return html`<div class="live-dashboard">
     <div class="live-dash-header">
       <div>
         <h1 class="live-dash-title">Live Timing</h1>
-        ${currentSession &&
-        html`<div class="live-dash-session-info">
+        <div class="live-dash-session-info">
           <span class=${`live-dash-session-badge ${isLive ? 'live' : ''}`}>
             ${isLive && html`<span class="live-dot"></span>`}
-            ${(currentSession.location || currentSession.circuit_short_name || '') +
-            ' - ' +
-            sessionLabel(currentSession)}
+            ${selectedRace
+              ? currentSession
+                ? `${selectedRace.name} - ${sessionShortLabel(currentSession)}`
+                : selectedRace.name
+              : '2026 Season'}
           </span>
-          ${currentSession._archived &&
+          ${selectedRaceStatus &&
+          html`<span class="live-dash-session-meta">${selectedRaceStatus}</span>`}
+          ${selectedRaceHasArchived &&
           html`<span class="session-source-badge archived">Archived</span>`}
-        </div>`}
+        </div>
       </div>
 
       <div class="live-refresh-group">
@@ -414,32 +748,98 @@ export function LiveDashboard() {
         <button
           class=${`live-dash-refresh-btn ${refreshing ? 'spinning' : ''}`}
           onClick=${handleManualRefresh}
-          disabled=${refreshing}
+          disabled=${refreshing || !selectedSession}
         >
           <${RefreshIcon} /> Refresh
         </button>
       </div>
     </div>
 
-    ${error &&
+    ${loadError &&
     html`<div class="page-note page-note--warning">
-      ${error}
+      ${loadError}
+    </div>`}
+    ${dashboardError &&
+    html`<div class="page-note page-note--warning">
+      ${dashboardError}
     </div>`}
 
-    <div class="live-session-select">
-      <select
-        value=${selectedSession || ''}
-        onChange=${(event) => setSelectedSession(event.target.value)}
-      >
-        ${sessions.map((session) => html`<option key=${session.session_key} value=${session.session_key}>
-          ${sessionLabel(session)}
-          ${session.date_start ? ` (${new Date(session.date_start).toLocaleDateString()})` : ''}
-          ${session._archived ? ' - archived' : ''}
-        </option>`)}
-      </select>
+    <div class="live-session-browser">
+      <div class="live-race-list" aria-label="2026 race weekends">
+        ${RACES.map((race) => {
+          const raceSessions = raceSessionMap.get(race.id) || [];
+          const raceHasLive = raceSessions.some(isLiveSession);
+          return html`<button
+            type="button"
+            key=${race.id}
+            class=${`live-race-button ${selectedRace?.id === race.id ? 'active' : ''} ${raceSessions.length ? 'has-sessions' : 'is-empty'} ${raceHasLive ? 'is-live' : ''}`}
+            onClick=${() => {
+              setSelectedRaceId(race.id);
+              if (selectedRace?.id !== race.id) {
+                setSelectedSession(
+                  getPreferredSession(raceSessions)?.session_key || null,
+                );
+              }
+            }}
+            aria-pressed=${selectedRace?.id === race.id}
+          >
+            <span class="live-race-button-name">${race.name}</span>
+          </button>`;
+        })}
+      </div>
+
+      <div class="live-session-browser-main">
+        ${selectedRace &&
+        html`<div class="live-session-browser-header">
+          <div>
+            <div class="live-session-browser-kicker">2026 Weekend Selector</div>
+            <h2 class="live-session-browser-title">${selectedRace.name}</h2>
+            <div class="live-session-browser-meta">
+              <span>${selectedRace.race_date_label}</span>
+              <span>${selectedRaceStatus}</span>
+            </div>
+          </div>
+        </div>`}
+
+        ${selectedRaceSessions.length
+          ? html`<div class="pill-tabs live-session-tabs">
+              ${selectedRaceSessions.map((session) => {
+                const sessionState = getSessionState(session);
+                return html`<button
+                  type="button"
+                  key=${session.session_key}
+                  class=${`pill-tab live-session-tab ${String(session.session_key) === String(selectedSession) ? 'active' : ''} ${sessionState === 'live' ? 'is-live' : ''}`}
+                  onClick=${() => setSelectedSession(session.session_key)}
+                  title=${session.date_start
+                    ? formatDateTime(session.date_start)
+                    : sessionLabel(session)}
+                >
+                  ${sessionState === 'live' && html`<span class="live-session-tab-dot"></span>`}
+                  ${sessionShortLabel(session)}
+                </button>`;
+              })}
+            </div>`
+          : html`<div class="live-no-session-card">
+              <h3 class="live-no-session-title">No session tabs yet</h3>
+              <p class="live-no-session-text">
+                ${anyRaceHasSessions
+                  ? `OpenF1 has not published weekend sessions for ${selectedRace?.name || 'this race'} yet.`
+                  : 'OpenF1 has not published this season\'s live weekend sessions yet.'}
+              </p>
+            </div>`}
+
+        ${currentSession &&
+        html`<div class="live-session-meta">
+          <span>${sessionLabel(currentSession)}</span>
+          ${currentSession.date_start &&
+          html`<span>${formatDateTime(currentSession.date_start)}</span>`}
+          ${currentSession._archived && html`<span>Archived source</span>`}
+        </div>`}
+      </div>
     </div>
 
-    ${timingTower.length > 0 &&
+    ${currentSession &&
+    timingTower.length > 0 &&
     html`<div class="live-kpi-row">
       <div class="live-kpi-card">
         <div class="live-kpi-value">${timingTower[0]?.shortName || '-'}</div>
@@ -466,7 +866,20 @@ export function LiveDashboard() {
       </div>`}
     </div>`}
 
-    <div class="live-dash-grid">
+    ${!currentSession &&
+    html`<div class="live-empty-state-card">
+      <${InlineMessage}
+        title=${selectedRaceSessions.length
+          ? 'Choose a session tab'
+          : 'No live timing selected'}
+        text=${selectedRaceSessions.length
+          ? 'Select FP1, qualifying, sprint, or race above to load timing for this weekend.'
+          : 'Choose another race from the season list, or check back closer to this event for published sessions.'}
+      />
+    </div>`}
+
+    ${currentSession &&
+    html`<div class="live-dash-grid">
       <div class="live-panel panel-timing">
         <div class="live-panel-header">
           <h3 class="live-panel-title">Timing Tower</h3>
@@ -624,6 +1037,6 @@ export function LiveDashboard() {
             : html`<${StintTimeline} stints=${stints} driverMap=${driverMap} totalLaps=${totalLaps} />`}
         </div>
       </div>
-    </div>
+    </div>`}
   </div>`;
 }

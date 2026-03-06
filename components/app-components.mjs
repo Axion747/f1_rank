@@ -147,9 +147,10 @@ function ChevronDownIcon() {
 
 function TeamDot({ teamId, size = 10 }) {
   const team = getTeam(teamId);
+  const color = team?.color || 'var(--color-text-faint)';
   return html`<span
     class="team-dot"
-    style=${{ backgroundColor: team.color, width: size, height: size }}
+    style=${{ backgroundColor: color, width: size, height: size }}
   ></span>`;
 }
 

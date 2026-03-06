@@ -1,5 +1,6 @@
 import { html, useMemo, useState } from '../lib/core.mjs';
 import { useAuth } from '../lib/app-utils.mjs';
+import { RACES } from '../data/f1-data.mjs';
 import {
   formatDateTime,
   formatRelativeDeadline,
@@ -48,6 +49,7 @@ export function CalendarView() {
   const seasonContext = useMemo(() => getSeasonContext(), []);
   const nextDeadline = useMemo(() => getNextPredictionDeadline(), []);
   const nextRace = nextDeadline ? getRace(nextDeadline.raceId) : seasonContext.nextRace;
+  const nextRaceName = nextRace?.name || seasonContext.nextRace?.name || 'Season complete';
 
   return html`<div>
     <section class="hero-card">
@@ -67,7 +69,7 @@ export function CalendarView() {
         </div>
         <div class="hero-meta-card">
           <span class="hero-meta-label">Next lock</span>
-          <span class="hero-meta-value">${nextDeadline ? nextRace.name : 'Season complete'}</span>
+          <span class="hero-meta-value">${nextDeadline ? nextRaceName : 'Season complete'}</span>
           ${nextDeadline &&
           html`<span class="hero-meta-note">
             ${formatDateTime(nextDeadline.startsAt)} - ${formatRelativeDeadline(nextDeadline.startsAt)}
@@ -90,6 +92,7 @@ export function CalendarView() {
         <button
           class="btn btn-primary btn-lg"
           onClick=${() => nextRace && setActiveRace(nextRace)}
+          disabled=${!nextRace}
         >
           Submit Picks
         </button>
