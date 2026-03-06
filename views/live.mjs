@@ -16,7 +16,7 @@ import {
   getFlagClass,
   getTeam,
 } from '../lib/f1-utils.mjs';
-import { InlineMessage, Spinner } from '../components/app-components.mjs';
+import { InlineMessage, RaceSelect, Spinner } from '../components/app-components.mjs';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -150,6 +150,25 @@ function getSessionState(session) {
   if (startsAt && now < startsAt) return 'upcoming';
   if (endsAt && now > endsAt) return 'completed';
   return 'scheduled';
+}
+
+function formatSessionStateLabel(session) {
+  switch (getSessionState(session)) {
+    case 'live':
+      return 'Live now';
+    case 'upcoming':
+      return 'Up next';
+    case 'completed':
+      return 'Complete';
+    default:
+      return 'Scheduled';
+  }
+}
+
+function formatStopDuration(value) {
+  const duration = Number(value);
+  if (!Number.isFinite(duration) || duration <= 0) return 'Stop logged';
+  return `${duration.toFixed(duration >= 10 ? 1 : 2)}s`;
 }
 
 function isLiveSession(session) {
@@ -770,6 +789,74 @@ export function LiveDashboard() {
     () => (laps.length ? Math.max(...laps.map((lap) => lap.lap_number || 0)) : 0),
     [laps],
   );
+  const fastestLapEntry = useMemo(
+    () =>
+      [...timingTower]
+        .filter((row) => row.bestLap)
+        .sort((left, right) => left.bestLap - right.bestLap)[0] || null,
+    [timingTower],
+  );
+  const recentRaceControl = useMemo(
+    () =>
+      [...raceControl]
+        .sort(
+          (left, right) =>
+            new Date(right.date || 0).getTime() - new Date(left.date || 0).getTime(),
+        )
+        .slice(0, 30),
+    [raceControl],
+  );
+  const trackStatus = useMemo(() => {
+    const latestMessage = recentRaceControl[0];
+    const source = String(
+      latestMessage?.flag || latestMessage?.category || latestMessage?.message || '',
+    ).toLowerCase();
+
+    if (!source) return isLive ? 'Green' : 'Clear';
+    if (source.includes('red')) return 'Red Flag';
+    if (source.includes('yellow') || source.includes('safety') || source.includes('vsc')) {
+      return 'Yellow';
+    }
+    if (source.includes('blue')) return 'Blue Flag';
+    if (source.includes('chequered') || source.includes('checkered')) {
+      return 'Chequered';
+    }
+    if (source.includes('green')) return 'Green';
+
+    return latestMessage?.category || latestMessage?.flag || 'Clear';
+  }, [isLive, recentRaceControl]);
+  const latestPitStop = useMemo(() => {
+    if (!pits.length) return null;
+
+    const latestPit = [...pits].sort(
+      (left, right) =>
+        new Date(right.date || 0).getTime() - new Date(left.date || 0).getTime(),
+    )[0];
+    const openF1Driver = driverMap[latestPit.driver_number];
+    const localDriver = getDriverByNumber(latestPit.driver_number);
+
+    return {
+      displayName:
+        openF1Driver?.name_acronym ||
+        (openF1Driver?.name
+          ? openF1Driver.name.split(' ').pop().slice(0, 3).toUpperCase()
+          : localDriver
+            ? localDriver.name.split(' ').pop().slice(0, 3).toUpperCase()
+            : `#${latestPit.driver_number}`),
+      lapNumber: latestPit.lap_number || null,
+      duration: latestPit.pit_duration ?? latestPit.duration ?? latestPit.lane_time ?? null,
+    };
+  }, [driverMap, pits]);
+  const tyreMix = useMemo(() => {
+    const counts = new Map();
+
+    timingTower.forEach((row) => {
+      if (!row.tyre) return;
+      counts.set(row.tyre, (counts.get(row.tyre) || 0) + 1);
+    });
+
+    return [...counts.entries()].sort((left, right) => right[1] - left[1]);
+  }, [timingTower]);
 
   const handleManualRefresh = async () => {
     const session = sessions.find(
@@ -843,41 +930,45 @@ export function LiveDashboard() {
     </div>`}
 
     <div class="live-session-browser">
-      <div class="live-race-list" aria-label="2026 race weekends">
-        ${RACES.map((race) => {
-          const raceSessions = raceSessionMap.get(race.id) || [];
-          const raceHasLive = raceSessions.some(isLiveSession);
-          return html`<button
-            type="button"
-            key=${race.id}
-            class=${`live-race-button ${selectedRace?.id === race.id ? 'active' : ''} ${raceSessions.length ? 'has-sessions' : 'is-empty'} ${raceHasLive ? 'is-live' : ''}`}
-            onClick=${() => {
-              setSelectedRaceId(race.id);
-              if (selectedRace?.id !== race.id) {
-                setSelectedSession(
-                  getPreferredSession(raceSessions)?.session_key || null,
-                );
-              }
-            }}
-            aria-pressed=${selectedRace?.id === race.id}
-          >
-            <span class="live-race-button-name">${race.name}</span>
-          </button>`;
-        })}
-      </div>
-
       <div class="live-session-browser-main">
-        ${selectedRace &&
-        html`<div class="live-session-browser-header">
-          <div>
+        <div class="live-session-browser-header">
+          <div class="live-session-browser-copy">
             <div class="live-session-browser-kicker">2026 Weekend Selector</div>
-            <h2 class="live-session-browser-title">${selectedRace.name}</h2>
-            <div class="live-session-browser-meta">
+            <div class="live-race-select">
+              <${RaceSelect}
+                value=${selectedRace?.id || null}
+                onChange=${(raceId) => {
+                  const nextRace = RACES.find((race) => race.id === raceId) || null;
+                  const nextRaceSessions = nextRace ? raceSessionMap.get(nextRace.id) || [] : [];
+                  setSelectedRaceId(raceId);
+                  setSelectedSession(
+                    getPreferredSession(nextRaceSessions)?.session_key || null,
+                  );
+                }}
+              />
+            </div>
+            ${selectedRace &&
+            html`<div class="live-session-browser-meta">
               <span>${selectedRace.race_date_label}</span>
               <span>${selectedRaceStatus}</span>
-            </div>
+            </div>`}
           </div>
-        </div>`}
+
+          ${selectedRace &&
+          html`<div class="live-session-highlight">
+            <div class="live-session-highlight-label">
+              ${currentSession ? formatSessionStateLabel(currentSession) : 'Weekend status'}
+            </div>
+            <div class="live-session-highlight-value">
+              ${currentSession ? sessionShortLabel(currentSession) : 'No session selected'}
+            </div>
+            <div class="live-session-highlight-meta">
+              ${currentSession?.date_start
+                ? formatDateTime(currentSession.date_start)
+                : selectedRaceStatus}
+            </div>
+          </div>`}
+        </div>
 
         ${selectedRaceSessions.length
           ? html`<div class="pill-tabs live-session-tabs">
@@ -915,35 +1006,51 @@ export function LiveDashboard() {
         </div>`}
       </div>
     </div>
-
     ${currentSession &&
-    timingTower.length > 0 &&
     html`<div class="live-kpi-row">
       <div class="live-kpi-card">
-        <div class="live-kpi-value">${timingTower[0]?.shortName || '-'}</div>
         <div class="live-kpi-label">Leader</div>
+        <div class="live-kpi-value">${timingTower[0]?.shortName || '-'}</div>
+        <div class="live-kpi-meta">${timingTower[0]?.teamName || 'Waiting on timing'}</div>
       </div>
       <div class="live-kpi-card">
-        <div class="live-kpi-value">${totalLaps || '-'}</div>
         <div class="live-kpi-label">Laps</div>
+        <div class="live-kpi-value">${totalLaps || '-'}</div>
+        <div class="live-kpi-meta">${sessionShortLabel(currentSession)}</div>
       </div>
       <div class="live-kpi-card">
-        <div class="live-kpi-value">
-          ${timingTower[0]?.bestLap ? formatLapTime(timingTower[0].bestLap) : '-'}
-        </div>
         <div class="live-kpi-label">Fastest Lap</div>
+        <div class="live-kpi-value">
+          ${fastestLapEntry?.bestLap ? formatLapTime(fastestLapEntry.bestLap) : '-'}
+        </div>
+        <div class="live-kpi-meta">${fastestLapEntry?.shortName || 'No lap times'}</div>
       </div>
       <div class="live-kpi-card">
-        <div class="live-kpi-value">${pits.length || 0}</div>
-        <div class="live-kpi-label">Pit Stops</div>
+        <div class="live-kpi-label">Track Status</div>
+        <div class="live-kpi-value">${trackStatus}</div>
+        <div class="live-kpi-meta">
+          ${recentRaceControl[0]?.date
+            ? new Date(recentRaceControl[0].date).toLocaleTimeString()
+            : 'No control notes'}
+        </div>
       </div>
-      ${weather &&
-      html`<div class="live-kpi-card">
-        <div class="live-kpi-value">${weather.air_temperature ?? '-'} degC</div>
+      <div class="live-kpi-card">
+        <div class="live-kpi-label">Pit Stops</div>
+        <div class="live-kpi-value">${pits.length || 0}</div>
+        <div class="live-kpi-meta">
+          ${latestPitStop
+            ? `${latestPitStop.displayName}${latestPitStop.lapNumber ? ` - Lap ${latestPitStop.lapNumber}` : ''}`
+            : 'No pit activity logged'}
+        </div>
+      </div>
+      <div class="live-kpi-card">
         <div class="live-kpi-label">Air Temp</div>
-      </div>`}
+        <div class="live-kpi-value">${weather?.air_temperature ?? '-'} degC</div>
+        <div class="live-kpi-meta">
+          ${weather ? `Track ${weather.track_temperature ?? '-'} deg` : 'Weather pending'}
+        </div>
+      </div>
     </div>`}
-
     ${!currentSession &&
     html`<div class="live-empty-state-card">
       <${InlineMessage}
@@ -952,7 +1059,7 @@ export function LiveDashboard() {
           : 'No live timing selected'}
         text=${selectedRaceSessions.length
           ? 'Select FP1, qualifying, sprint, or race above to load timing for this weekend.'
-          : 'Choose another race from the season list, or check back closer to this event for published sessions.'}
+          : 'Choose another race from the dropdown, or check back closer to this event for published sessions.'}
       />
     </div>`}
 
@@ -960,7 +1067,7 @@ export function LiveDashboard() {
     html`<div class="live-dash-grid">
       <div class="live-panel panel-timing">
         <div class="live-panel-header">
-          <h3 class="live-panel-title">Timing Tower</h3>
+          <h3 class="live-panel-title">Times</h3>
           <span class="live-panel-subtitle">
             ${isLive ? 'Live session' : currentSession?._archived ? 'Archived replay' : 'Latest available'}
           </span>
@@ -976,15 +1083,24 @@ export function LiveDashboard() {
                 }
               />`
             : html`<table class="timing-tower">
+                <colgroup>
+                  <col style=${{ width: '52px' }} />
+                  <col />
+                  <col style=${{ width: '74px' }} />
+                  <col style=${{ width: '60px' }} />
+                  <col style=${{ width: '82px' }} />
+                  <col style=${{ width: '82px' }} />
+                  <col style=${{ width: '74px' }} />
+                </colgroup>
                 <thead>
                   <tr>
-                    <th style=${{ width: '40px' }}>Pos</th>
+                    <th>Pos</th>
                     <th>Driver</th>
                     <th class="right">Gap</th>
                     <th class="right">Int</th>
-                    <th class="right">Last Lap</th>
+                    <th class="right">Last</th>
                     <th class="right">Best</th>
-                    <th>Tyre</th>
+                    <th class="right">Tyre</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1000,8 +1116,10 @@ export function LiveDashboard() {
                           class="timing-driver-color"
                           style=${{ background: row.teamColor }}
                         ></div>
-                        <span class="timing-driver-name">${row.shortName}</span>
-                        <span class="timing-driver-team">${row.teamName}</span>
+                        <div class="timing-driver-text">
+                          <span class="timing-driver-name">${row.shortName}</span>
+                          <span class="timing-driver-team">${row.teamName}</span>
+                        </div>
                       </div>
                     </td>
                     <td class="right">
@@ -1024,7 +1142,7 @@ export function LiveDashboard() {
                       <span class=${`lap-time ${row.lapClass}`}>${row.lastLap ? formatLapTime(row.lastLap) : '-'}</span>
                     </td>
                     <td class="right mono">${row.bestLap ? formatLapTime(row.bestLap) : '-'}</td>
-                    <td>
+                    <td class="right">
                       ${row.tyre
                         ? html`<div class="timing-tyre">
                             <span class=${`tyre-badge ${row.tyre}`}>${row.tyre.charAt(0).toUpperCase()}</span>
@@ -1032,7 +1150,7 @@ export function LiveDashboard() {
                           </div>`
                         : '-'}
                     </td>
-                  </tr>`)}
+                  </tr>`) }
                 </tbody>
               </table>`}
         </div>
@@ -1086,14 +1204,14 @@ export function LiveDashboard() {
           <h3 class="live-panel-title">Race Control</h3>
           ${raceControl.length > 0 && html`<span class="live-panel-subtitle">${raceControl.length} messages</span>`}
         </div>
-        <div class="live-panel-body">
-          ${raceControl.length === 0
+        <div class="live-panel-body live-panel-body--race-control">
+          ${recentRaceControl.length === 0
             ? html`<${InlineMessage}
                 title="No race control notes"
                 text="Messages will appear here when the session publishes them."
               />`
             : html`<div class="rc-messages">
-                ${[...raceControl].reverse().slice(0, 30).map((message, index) => html`<div
+                ${recentRaceControl.slice(0, 14).map((message, index) => html`<div
                   key=${index}
                   class="rc-message"
                 >
@@ -1105,11 +1223,42 @@ export function LiveDashboard() {
                       ${message.date ? ` - ${new Date(message.date).toLocaleTimeString()}` : ''}
                     </div>
                   </div>
-                </div>`)}
+                </div>`) }
               </div>`}
+
+          <div class="race-control-insights">
+            <div class="race-control-insight">
+              <div class="race-control-insight-label">Track status</div>
+              <div class="race-control-insight-value">${trackStatus}</div>
+              <div class="race-control-insight-meta">
+                ${recentRaceControl[0]?.date
+                  ? `Updated ${new Date(recentRaceControl[0].date).toLocaleTimeString()}`
+                  : 'No active control updates'}
+              </div>
+            </div>
+            <div class="race-control-insight">
+              <div class="race-control-insight-label">Latest pit</div>
+              <div class="race-control-insight-value">${latestPitStop?.displayName || '-'}</div>
+              <div class="race-control-insight-meta">
+                ${latestPitStop
+                  ? `${latestPitStop.lapNumber ? `Lap ${latestPitStop.lapNumber}` : 'Pit event'} - ${formatStopDuration(latestPitStop.duration)}`
+                  : 'No pit activity logged'}
+              </div>
+            </div>
+            <div class="race-control-insight race-control-insight--wide">
+              <div class="race-control-insight-label">Tyre mix</div>
+              ${tyreMix.length
+                ? html`<div class="tyre-mix-list">
+                    ${tyreMix.map(([compound, count]) => html`<span key=${compound} class="tyre-mix-chip">
+                      <span class=${`tyre-badge ${compound}`}>${compound.charAt(0).toUpperCase()}</span>
+                      <span>${count}</span>
+                    </span>`) }
+                  </div>`
+                : html`<div class="race-control-insight-meta">Tyre compounds will appear once stint data publishes.</div>`}
+            </div>
+          </div>
         </div>
       </div>
-
       <div class="live-panel panel-stints">
         <div class="live-panel-header">
           <h3 class="live-panel-title">Tyre Strategy</h3>
@@ -1126,7 +1275,4 @@ export function LiveDashboard() {
     </div>`}
   </div>`;
 }
-
-
-
 

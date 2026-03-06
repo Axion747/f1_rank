@@ -22,21 +22,35 @@ function toNumber(value) {
   return Number.isFinite(numericValue) ? numericValue : 0;
 }
 
+function toKalshiCents(centsValue, dollarsValue) {
+  if (centsValue !== undefined && centsValue !== null && centsValue !== "") {
+    const numericValue = Number(centsValue);
+    if (Number.isFinite(numericValue)) return numericValue;
+  }
+
+  if (dollarsValue !== undefined && dollarsValue !== null && dollarsValue !== "") {
+    const numericValue = Number(dollarsValue);
+    if (Number.isFinite(numericValue)) return Math.round(numericValue * 100);
+  }
+
+  return 0;
+}
+
 function normalizeMarket(market, options = {}) {
   const includeMeta = Boolean(options.includeMeta);
   const normalized = {
-    driver: toText(market?.yes_sub_title),
-    team: toText(market?.subtitle).replace(":: ", ""),
-    yes_ask: toNumber(market?.yes_ask),
-    yes_bid: toNumber(market?.yes_bid),
-    last_price: toNumber(market?.last_price),
+    driver: toText(market?.driver || market?.yes_sub_title || market?.title),
+    team: toText(market?.team || market?.subtitle).replace(":: ", ""),
+    yes_ask: toKalshiCents(market?.yes_ask, market?.yes_ask_dollars),
+    yes_bid: toKalshiCents(market?.yes_bid, market?.yes_bid_dollars),
+    last_price: toKalshiCents(market?.last_price, market?.last_price_dollars),
     volume: toNumber(market?.volume),
-    volume_24h: toNumber(market?.volume_24h),
+    volume_24h: toNumber(market?.volume_24h ?? market?.volume_24h_fp),
   };
 
   if (includeMeta) {
     normalized.ticker = toText(market?.ticker);
-    normalized.status = toText(market?.status);
+    normalized.status = toText(market?.status || market?.result);
   }
 
   return normalized;

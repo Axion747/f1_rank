@@ -39,19 +39,35 @@ def to_number(value) -> float:
         return 0
 
 
+def to_kalshi_cents(cents_value, dollars_value) -> float:
+    if cents_value not in (None, ""):
+        cents = to_number(cents_value)
+        if cents or cents_value == 0:
+            return cents
+    if dollars_value not in (None, ""):
+        dollars = to_number(dollars_value)
+        if dollars or dollars_value == 0:
+            return round(dollars * 100)
+    return 0
+
+
 def normalize_kalshi_market(market: dict, include_meta: bool = False) -> dict:
     normalized = {
-        "driver": to_text(market.get("yes_sub_title")),
-        "team": to_text(market.get("subtitle")).replace(":: ", ""),
-        "yes_ask": to_number(market.get("yes_ask")),
-        "yes_bid": to_number(market.get("yes_bid")),
-        "last_price": to_number(market.get("last_price")),
+        "driver": to_text(
+            market.get("driver") or market.get("yes_sub_title") or market.get("title")
+        ),
+        "team": to_text(market.get("team") or market.get("subtitle")).replace(":: ", ""),
+        "yes_ask": to_kalshi_cents(market.get("yes_ask"), market.get("yes_ask_dollars")),
+        "yes_bid": to_kalshi_cents(market.get("yes_bid"), market.get("yes_bid_dollars")),
+        "last_price": to_kalshi_cents(
+            market.get("last_price"), market.get("last_price_dollars")
+        ),
         "volume": to_number(market.get("volume")),
-        "volume_24h": to_number(market.get("volume_24h")),
+        "volume_24h": to_number(market.get("volume_24h") or market.get("volume_24h_fp")),
     }
     if include_meta:
         normalized["ticker"] = to_text(market.get("ticker"))
-        normalized["status"] = to_text(market.get("status"))
+        normalized["status"] = to_text(market.get("status") or market.get("result"))
     return normalized
 
 # Map our app's race IDs to Kalshi event ticker suffixes
@@ -259,7 +275,4 @@ async def health():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
-
-
-
 
