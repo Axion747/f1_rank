@@ -643,6 +643,7 @@ function Navbar({ route }) {
 
   const navItems = [
     { path: '/', label: 'Calendar' },
+    { path: '/live', label: 'Live' },
     { path: '/rankings', label: 'Rankings' },
     { path: '/leaderboard', label: 'Leaderboard' },
     { path: '/championships', label: 'Standings' }
@@ -1591,26 +1592,48 @@ function AuthGate() {
   `;
 }
 
-// ===== OPENF1 DIRECT FETCH =====
+// ===== API PROXY CONFIGURATION =====
 
 const OPENF1_BASE = 'https://api.openf1.org/v1';
-// Kalshi API: use Vercel serverless function on production, local proxy on sandbox
-const KALSHI_API = '__PORT_8000__';
+// Proxy API: use Vercel serverless function on production, local proxy on sandbox
+const PROXY_API = '__PORT_8000__';
 // When deployed via Perplexity, __PORT_8000__ gets replaced with 'port/8000'
 // When deployed via Vercel, it stays as the literal string '__PORT_8000__'
-const KALSHI_HAS_PROXY = KALSHI_API !== '__' + 'PORT_8000__'; // true when proxy is available
+const HAS_PROXY = PROXY_API !== '__' + 'PORT_8000__'; // true when proxy is available
+
 function kalshiUrl(type, raceId) {
-  if (KALSHI_HAS_PROXY) {
-    // Sandbox deploy with proxy server
-    if (type === 'championship') return `${KALSHI_API}/api/kalshi/championship`;
-    return `${KALSHI_API}/api/kalshi/${type}/${raceId}`;
+  if (HAS_PROXY) {
+    if (type === 'championship') return `${PROXY_API}/api/kalshi/championship`;
+    return `${PROXY_API}/api/kalshi/${type}/${raceId}`;
   }
-  // Vercel deploy — use serverless function
   if (type === 'championship') return `/api/kalshi?type=championship`;
   return `/api/kalshi?type=${type}&race_id=${raceId}`;
 }
 
+function openF1Url(endpoint, params = {}) {
+  const qs = Object.entries(params).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
+  if (HAS_PROXY) {
+    return `${PROXY_API}/api/openf1/${endpoint}${qs ? '?' + qs : ''}`;
+  }
+  // Vercel deploy — use serverless function
+  return `/api/openf1?endpoint=${endpoint}${qs ? '&' + qs : ''}`;
+}
+
 async function openF1Fetch(endpoint, params = {}) {
+  // Try authenticated proxy first, fall back to direct
+  try {
+    const proxyUrl = openF1Url(endpoint, params);
+    const res = await fetch(proxyUrl);
+    if (res.ok) {
+      const body = await res.json();
+      if (body.data) return body.data;
+      if (Array.isArray(body)) return body;
+      return body;
+    }
+  } catch (e) {
+    // Proxy failed, fall back to direct
+  }
+  // Direct fallback (may fail during live sessions without auth)
   const qs = Object.entries(params).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
   const url = `${OPENF1_BASE}/${endpoint}${qs ? '?' + qs : ''}`;
   const res = await fetch(url);
@@ -1777,8 +1800,7 @@ function RankingsView() {
           <div class="consensus-section">
             <h3 class="consensus-title">Power Rankings${raceType === 'sprint' ? ' — Sprint' : ''}</h3>
             <p style=${{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)', marginBottom: 'var(--space-5)', marginTop: 'calc(-1 * var(--space-2))' }}>
-              Aggregated from ${users.length} ${users.length === 1 ? 'prediction' : 'predictions'} using F1 points. Score out of 1000 — a perfect 1000 means every user ranked this driver P1.
-            </p>
+              Aggregated from ${users.length} ${users.length === 1 ? 'prediction' : 'predictions'}.
             <div class="power-rankings-list">
               ${powerScores.map((entry, i) => {
                 const driver = getDriver(entry.driverId);
@@ -1940,6 +1962,570 @@ function LeaderboardView() {
     </div>
   `;
 }
+
+
+
+// ===== LIVE DASHBOARD VIEW =====
+
+function RefreshIcon() {
+  return html`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-3.2-6.8"/><path d="M21 3v6h-6"/></svg>`;
+}
+
+function getFlagClass(flag) {
+  const f = (flag || '').toLowerCase();
+  if (f.includes('green')) return 'rc-flag-green';
+  if (f.includes('yellow') || f.includes('vsc') || f.includes('safety')) return 'rc-flag-yellow';
+  if (f.includes('red')) return 'rc-flag-red';
+  if (f.includes('blue')) return 'rc-flag-blue';
+  if (f.includes('chequered') || f.includes('checkered')) return 'rc-flag-chequered';
+  return 'rc-flag-default';
+}
+
+function formatTimeAgo(date) {
+  const secs = Math.floor((new Date() - date) / 1000);
+  if (secs < 10) return 'just now';
+  if (secs < 60) return secs + 's ago';
+  const mins = Math.floor(secs / 60);
+  return mins + 'm ago';
+}
+
+function StintTimeline({ stints, getDriverInfo, totalLaps }) {
+  const byDriver = useMemo(() => {
+    const map = {};
+    stints.forEach(s => {
+      if (!map[s.driver_number]) map[s.driver_number] = [];
+      map[s.driver_number].push(s);
+    });
+    Object.values(map).forEach(arr => arr.sort((a, b) => (a.stint_number || 0) - (b.stint_number || 0)));
+    return map;
+  }, [stints]);
+
+  const maxLaps = totalLaps || Math.max(...stints.map(s => (s.lap_end || s.lap_start || 0)));
+
+  return html`
+    <table class="stints-table">
+      <thead>
+        <tr>
+          <th style=${{ width: '120px' }}>Driver</th>
+          <th>Tyre Strategy</th>
+          <th style=${{ width: '80px' }}>Stints</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${Object.entries(byDriver).map(([num, driverStints]) => {
+          const drv = getDriverInfo(Number(num));
+          return html`
+            <tr key=${num}>
+              <td>
+                <div class="timing-driver">
+                  <div class="timing-driver-color" style=${{ background: drv.teamColor }} />
+                  <span class="timing-driver-name">${drv.shortName}</span>
+                </div>
+              </td>
+              <td class="stint-bar-cell">
+                <div class="stint-bar-track">
+                  ${driverStints.map((s, i) => {
+                    const start = s.lap_start || 1;
+                    const end = s.lap_end || (i < driverStints.length - 1 ? (driverStints[i + 1].lap_start || start) - 1 : maxLaps);
+                    const lapCount = Math.max(1, end - start + 1);
+                    const pct = maxLaps > 0 ? (lapCount / maxLaps) * 100 : 10;
+                    const compound = (s.compound || 'unknown').toLowerCase();
+                    return html`<div key=${i} class=${`stint-bar-segment ${compound}`}
+                      style=${{ width: pct + '%' }}
+                      data-laps=${lapCount}
+                      title=${`${compound.charAt(0).toUpperCase() + compound.slice(1)}: Laps ${start}-${end} (${lapCount} laps)`}
+                    />`;
+                  })}
+                </div>
+              </td>
+              <td style=${{ fontFamily: 'var(--font-mono)', fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>
+                ${driverStints.map((s, i) => html`
+                  <span key=${i} class=${`tyre-badge ${(s.compound || '').toLowerCase()}`} style=${{ width: '18px', height: '18px', fontSize: '9px', marginRight: '2px' }}>
+                    ${(s.compound || '?').charAt(0).toUpperCase()}
+                  </span>
+                `)}
+              </td>
+            </tr>
+          `;
+        })}
+      </tbody>
+    </table>
+  `;
+}
+
+function LiveDashboard() {
+  const [sessions, setSessions] = useState([]);
+  const [selectedSession, setSelectedSession] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState(null);
+  const [positions, setPositions] = useState([]);
+  const [laps, setLaps] = useState([]);
+  const [intervals, setIntervals] = useState([]);
+  const [weather, setWeather] = useState(null);
+  const [raceControl, setRaceControl] = useState([]);
+  const [stints, setStints] = useState([]);
+  const [drivers, setDrivers] = useState([]);
+  const [pits, setPits] = useState([]);
+  const autoRefreshRef = useRef(null);
+
+  useEffect(() => {
+    async function loadSessions() {
+      setLoading(true);
+      try {
+        let data = await openF1Fetch('sessions', { year: 2026 });
+        if (!data || !Array.isArray(data) || data.length === 0) {
+          data = await openF1Fetch('sessions', { year: 2025 });
+        }
+        if (Array.isArray(data) && data.length > 0) {
+          // Sort by date descending
+          data.sort((a, b) => new Date(b.date_start || 0) - new Date(a.date_start || 0));
+          setSessions(data);
+          // Pick: active session > most recent past session > first session
+          const now = new Date();
+          const active = data.find(s => s.date_start && s.date_end && new Date(s.date_start) <= now && new Date(s.date_end) >= now);
+          const past = data.filter(s => s.date_end && new Date(s.date_end) < now);
+          const best = active || (past.length > 0 ? past[0] : data[data.length - 1]);
+          setSelectedSession(best.session_key);
+        }
+      } catch (e) {
+        console.error('Failed to load sessions:', e);
+      }
+      setLoading(false);
+    }
+    loadSessions();
+  }, []);
+
+  const fetchDashboardData = useCallback(async (sessionKey) => {
+    if (!sessionKey) return;
+    try {
+      const [posData, lapData, intData, wxData, rcData, stintData, drvData, pitData] = await Promise.allSettled([
+        openF1Fetch('position', { session_key: sessionKey }),
+        openF1Fetch('laps', { session_key: sessionKey }),
+        openF1Fetch('intervals', { session_key: sessionKey }),
+        openF1Fetch('weather', { session_key: sessionKey }),
+        openF1Fetch('race_control', { session_key: sessionKey }),
+        openF1Fetch('stints', { session_key: sessionKey }),
+        openF1Fetch('drivers', { session_key: sessionKey }),
+        openF1Fetch('pit', { session_key: sessionKey }),
+      ]);
+      if (posData.status === 'fulfilled' && Array.isArray(posData.value)) setPositions(posData.value);
+      if (lapData.status === 'fulfilled' && Array.isArray(lapData.value)) setLaps(lapData.value);
+      if (intData.status === 'fulfilled' && Array.isArray(intData.value)) setIntervals(intData.value);
+      if (wxData.status === 'fulfilled' && Array.isArray(wxData.value) && wxData.value.length > 0) {
+        setWeather(wxData.value[wxData.value.length - 1]);
+      }
+      if (rcData.status === 'fulfilled' && Array.isArray(rcData.value)) setRaceControl(rcData.value);
+      if (stintData.status === 'fulfilled' && Array.isArray(stintData.value)) setStints(stintData.value);
+      if (drvData.status === 'fulfilled' && Array.isArray(drvData.value)) setDrivers(drvData.value);
+      if (pitData.status === 'fulfilled' && Array.isArray(pitData.value)) setPits(pitData.value);
+      setLastUpdate(new Date());
+    } catch (e) {
+      console.error('Dashboard fetch error:', e);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!selectedSession) return;
+    setRefreshing(true);
+    fetchDashboardData(selectedSession).then(() => setRefreshing(false));
+  }, [selectedSession, fetchDashboardData]);
+
+  useEffect(() => {
+    if (!selectedSession) return;
+    const currentSess = sessions.find(s => s.session_key === selectedSession);
+    const isLive = currentSess && currentSess.date_end && new Date(currentSess.date_end) > new Date();
+    if (isLive) {
+      autoRefreshRef.current = setInterval(() => {
+        fetchDashboardData(selectedSession);
+        setLastUpdate(new Date());
+      }, 10000);
+    }
+    return () => { if (autoRefreshRef.current) clearInterval(autoRefreshRef.current); };
+  }, [selectedSession, sessions, fetchDashboardData]);
+
+  const handleManualRefresh = async () => {
+    setRefreshing(true);
+    await fetchDashboardData(selectedSession);
+    setRefreshing(false);
+  };
+
+  const driverMap = useMemo(() => {
+    const map = {};
+    (drivers || []).forEach(d => { map[d.driver_number] = d; });
+    return map;
+  }, [drivers]);
+
+  const getDriverInfo = useCallback((driverNumber) => {
+    const of1 = driverMap[driverNumber];
+    const local = DRIVERS.find(d => d.number === driverNumber);
+    const team = local ? getTeam(local.team) : null;
+    return {
+      name: of1 ? (of1.first_name ? of1.first_name.charAt(0) + '. ' : '') + (of1.last_name || of1.name_acronym || driverNumber) : (local ? local.name : '#' + driverNumber),
+      shortName: of1 && of1.name_acronym ? of1.name_acronym : (local ? local.name.split(' ').pop().substring(0, 3).toUpperCase() : '' + driverNumber),
+      teamColor: of1 && of1.team_colour ? '#' + of1.team_colour : (team ? team.color : '#555'),
+      teamName: of1 && of1.team_name ? of1.team_name : (team ? team.name : ''),
+      number: driverNumber,
+    };
+  }, [driverMap]);
+
+  const timingTower = useMemo(() => {
+    if (!positions.length) return [];
+    const latestPos = {};
+    positions.forEach(p => {
+      if (!latestPos[p.driver_number] || new Date(p.date) > new Date(latestPos[p.driver_number].date)) {
+        latestPos[p.driver_number] = p;
+      }
+    });
+    const latestInt = {};
+    (intervals || []).forEach(iv => {
+      if (!latestInt[iv.driver_number] || new Date(iv.date) > new Date(latestInt[iv.driver_number].date)) {
+        latestInt[iv.driver_number] = iv;
+      }
+    });
+    const bestLap = {};
+    const latestLap = {};
+    let overallBest = Infinity;
+    (laps || []).forEach(l => {
+      if (l.lap_duration && l.lap_duration > 0) {
+        if (!bestLap[l.driver_number] || l.lap_duration < bestLap[l.driver_number]) {
+          bestLap[l.driver_number] = l.lap_duration;
+        }
+        if (l.lap_duration < overallBest) overallBest = l.lap_duration;
+      }
+      if (!latestLap[l.driver_number] || (l.lap_number > (latestLap[l.driver_number].lap_number || 0))) {
+        latestLap[l.driver_number] = l;
+      }
+    });
+    const latestStint = {};
+    (stints || []).forEach(s => {
+      if (!latestStint[s.driver_number] || (s.stint_number > (latestStint[s.driver_number].stint_number || 0))) {
+        latestStint[s.driver_number] = s;
+      }
+    });
+    return Object.values(latestPos)
+      .sort((a, b) => a.position - b.position)
+      .map(p => {
+        const drv = getDriverInfo(p.driver_number);
+        const iv = latestInt[p.driver_number];
+        const lap = latestLap[p.driver_number];
+        const best = bestLap[p.driver_number];
+        const stint = latestStint[p.driver_number];
+        const lapTime = lap ? lap.lap_duration : null;
+        let lapClass = '';
+        if (lapTime && lapTime === overallBest) lapClass = 'fastest';
+        else if (lapTime && lapTime === best) lapClass = 'personal-best';
+        return {
+          position: p.position,
+          driver: drv,
+          gap: iv && iv.gap_to_leader != null ? iv.gap_to_leader : null,
+          interval: iv && iv.interval != null ? iv.interval : null,
+          lastLap: lapTime,
+          lapClass: lapClass,
+          bestLap: best,
+          lapNumber: lap ? lap.lap_number : null,
+          tyre: stint && stint.compound ? stint.compound.toLowerCase() : null,
+          tyreLaps: stint ? ((lap ? lap.lap_number : 0) - (stint.lap_start || 0) + 1) : null,
+        };
+      });
+  }, [positions, intervals, laps, stints, getDriverInfo]);
+
+  const currentSession = sessions.find(s => s.session_key === selectedSession);
+  const isLive = currentSession && currentSession.date_end && new Date(currentSession.date_end) > new Date();
+
+  const sessionsByMeeting = useMemo(() => {
+    const grouped = {};
+    sessions.forEach(s => {
+      const key = s.meeting_key || s.circuit_short_name || 'Unknown';
+      if (!grouped[key]) grouped[key] = { name: s.location || s.circuit_short_name || 'Unknown', sessions: [] };
+      grouped[key].sessions.push(s);
+    });
+    Object.values(grouped).forEach(g => g.sessions.sort((a, b) => new Date(a.date_start) - new Date(b.date_start)));
+    return Object.values(grouped);
+  }, [sessions]);
+
+  const sessionLabel = (s) => {
+    const type = (s.session_name || s.session_type || '').replace(/_/g, ' ');
+    return type.charAt(0).toUpperCase() + type.slice(1);
+  };
+
+  const totalLaps = useMemo(() => {
+    if (!laps.length) return 0;
+    return Math.max(...laps.map(l => l.lap_number || 0));
+  }, [laps]);
+
+  const totalPitStops = pits.length;
+  const leader = timingTower[0];
+
+  if (loading) {
+    return html`
+      <div class="live-dashboard">
+        <h1 class="live-dash-title">Live Timing</h1>
+        <div style=${{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '24px' }}>
+          ${[1,2,3,4,5,6,7,8].map(i => html`<div key=${i} class="live-dash-skeleton" style=${{ width: (70 + i * 3) + '%', height: '28px' }} />`)}
+        </div>
+      </div>
+    `;
+  }
+
+  if (!sessions.length) {
+    return html`
+      <div class="live-dashboard">
+        <div class="live-dash-empty">
+          <div class="live-dash-empty-icon">&#127950;</div>
+          <div class="live-dash-empty-title">No Sessions Available</div>
+          <p class="live-dash-empty-text">
+            Session data will appear here once 2026 F1 sessions begin. Check back during a race weekend for live timing data.
+          </p>
+        </div>
+      </div>
+    `;
+  }
+
+  return html`
+    <div class="live-dashboard">
+      <div class="live-dash-header">
+        <div>
+          <h1 class="live-dash-title">Live Timing</h1>
+          ${currentSession && html`
+            <div class="live-dash-session-info" style=${{ marginTop: '4px' }}>
+              <span class=${`live-dash-session-badge ${isLive ? 'live' : ''}`}>
+                ${isLive && html`<span class="live-dot" />`}
+                ${(currentSession.location || currentSession.circuit_short_name || '') + ' \u2014 ' + sessionLabel(currentSession)}
+              </span>
+            </div>
+          `}
+        </div>
+        <div style=${{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+          ${lastUpdate && html`<span style=${{ fontSize: 'var(--text-xs)', color: 'var(--color-text-muted)' }}>Updated ${formatTimeAgo(lastUpdate)}</span>`}
+          <button class=${`live-dash-refresh-btn ${refreshing ? 'spinning' : ''}`} onClick=${handleManualRefresh} disabled=${refreshing}>
+            <${RefreshIcon} /> Refresh
+          </button>
+        </div>
+      </div>
+
+      ${sessionsByMeeting.length > 0 && html`
+        <div style=${{ marginBottom: 'var(--space-4)' }}>
+          <select
+            value=${selectedSession || ''}
+            onChange=${(e) => setSelectedSession(Number(e.target.value))}
+            style=${{
+              background: 'var(--color-surface-2)',
+              border: '1px solid var(--color-border)',
+              borderRadius: 'var(--radius-md)',
+              color: 'var(--color-text)',
+              padding: '8px 12px',
+              fontFamily: 'var(--font-body)',
+              fontSize: 'var(--text-sm)',
+              width: '100%',
+              maxWidth: '400px',
+              cursor: 'pointer',
+            }}
+          >
+            ${sessionsByMeeting.map(meeting => html`
+              <optgroup key=${meeting.name} label=${meeting.name}>
+                ${meeting.sessions.map(s => html`
+                  <option key=${s.session_key} value=${s.session_key}>
+                    ${sessionLabel(s)} ${s.date_start ? '(' + new Date(s.date_start).toLocaleDateString() + ')' : ''}
+                  </option>
+                `)}
+              </optgroup>
+            `)}
+          </select>
+        </div>
+      `}
+
+      ${timingTower.length > 0 && html`
+        <div class="live-kpi-row">
+          <div class="live-kpi-card">
+            <div class="live-kpi-value">${leader ? leader.driver.shortName : '\u2014'}</div>
+            <div class="live-kpi-label">Leader</div>
+          </div>
+          <div class="live-kpi-card">
+            <div class="live-kpi-value">${totalLaps || '\u2014'}</div>
+            <div class="live-kpi-label">Laps</div>
+          </div>
+          <div class="live-kpi-card">
+            <div class="live-kpi-value">${leader && leader.bestLap ? formatLapTime(leader.bestLap) : '\u2014'}</div>
+            <div class="live-kpi-label">Fastest Lap</div>
+          </div>
+          <div class="live-kpi-card">
+            <div class="live-kpi-value">${totalPitStops || '0'}</div>
+            <div class="live-kpi-label">Pit Stops</div>
+          </div>
+          ${weather && html`
+            <div class="live-kpi-card">
+              <div class="live-kpi-value">${weather.air_temperature != null ? weather.air_temperature + '\u00b0C' : '\u2014'}</div>
+              <div class="live-kpi-label">Air Temp</div>
+            </div>
+            <div class="live-kpi-card">
+              <div class="live-kpi-value">${weather.track_temperature != null ? weather.track_temperature + '\u00b0C' : '\u2014'}</div>
+              <div class="live-kpi-label">Track Temp</div>
+            </div>
+          `}
+        </div>
+      `}
+
+      <div class="live-dash-grid">
+        <div class="live-panel panel-timing">
+          <div class="live-panel-header">
+            <h3 class="live-panel-title">Timing Tower</h3>
+            ${isLive && html`<span class="live-panel-subtitle">Auto-refreshing</span>`}
+          </div>
+          <div class="live-panel-body">
+            ${timingTower.length === 0 ? html`
+              <div style=${{ padding: '40px', textAlign: 'center', color: 'var(--color-text-muted)' }}>
+                Waiting for position data...
+              </div>
+            ` : html`
+              <table class="timing-tower">
+                <thead>
+                  <tr>
+                    <th style=${{ width: '40px' }}>Pos</th>
+                    <th>Driver</th>
+                    <th class="right">Gap</th>
+                    <th class="right">Int</th>
+                    <th class="right">Last Lap</th>
+                    <th class="right">Best</th>
+                    <th>Tyre</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${timingTower.map(row => html`
+                    <tr key=${row.driver.number}>
+                      <td>
+                        <span class=${`timing-pos ${row.position === 1 ? 'p1' : row.position === 2 ? 'p2' : row.position === 3 ? 'p3' : ''}`}>
+                          ${row.position}
+                        </span>
+                      </td>
+                      <td>
+                        <div class="timing-driver">
+                          <div class="timing-driver-color" style=${{ background: row.driver.teamColor }} />
+                          <span class="timing-driver-name">${row.driver.shortName}</span>
+                          <span class="timing-driver-team">${row.driver.teamName}</span>
+                        </div>
+                      </td>
+                      <td class="right">
+                        <span class=${`timing-gap ${row.position === 1 ? 'leader' : ''}`}>
+                          ${row.position === 1 ? 'LEADER' : (row.gap != null ? '+' + (typeof row.gap === 'number' ? row.gap.toFixed(3) : row.gap) : '\u2014')}
+                        </span>
+                      </td>
+                      <td class="right mono">
+                        ${row.position === 1 ? '\u2014' : (row.interval != null ? '+' + (typeof row.interval === 'number' ? row.interval.toFixed(3) : row.interval) : '\u2014')}
+                      </td>
+                      <td class="right mono">
+                        <span class=${`lap-time ${row.lapClass}`}>
+                          ${row.lastLap ? formatLapTime(row.lastLap) : '\u2014'}
+                        </span>
+                      </td>
+                      <td class="right mono">
+                        ${row.bestLap ? formatLapTime(row.bestLap) : '\u2014'}
+                      </td>
+                      <td>
+                        ${row.tyre ? html`
+                          <div style=${{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                            <span class=${`tyre-badge ${row.tyre}`}>${row.tyre.charAt(0).toUpperCase()}</span>
+                            ${row.tyreLaps != null && html`<span class="tyre-laps">${row.tyreLaps}L</span>`}
+                          </div>
+                        ` : '\u2014'}
+                      </td>
+                    </tr>
+                  `)}
+                </tbody>
+              </table>
+            `}
+          </div>
+        </div>
+
+        <div class="live-panel panel-weather">
+          <div class="live-panel-header">
+            <h3 class="live-panel-title">Weather</h3>
+          </div>
+          <div class="live-panel-body">
+            ${!weather ? html`
+              <div style=${{ padding: '24px', textAlign: 'center', color: 'var(--color-text-muted)' }}>No weather data</div>
+            ` : html`
+              <div class="weather-grid">
+                <div class="weather-stat">
+                  <div class="weather-stat-icon">\u{1f321}\ufe0f</div>
+                  <div class="weather-stat-value">${weather.air_temperature != null ? weather.air_temperature + '\u00b0' : '\u2014'}</div>
+                  <div class="weather-stat-label">Air</div>
+                </div>
+                <div class="weather-stat">
+                  <div class="weather-stat-icon">\u{1f6e3}\ufe0f</div>
+                  <div class="weather-stat-value">${weather.track_temperature != null ? weather.track_temperature + '\u00b0' : '\u2014'}</div>
+                  <div class="weather-stat-label">Track</div>
+                </div>
+                <div class="weather-stat">
+                  <div class="weather-stat-icon">\u{1f4a8}</div>
+                  <div class="weather-stat-value">${weather.wind_speed != null ? weather.wind_speed + ' km/h' : '\u2014'}</div>
+                  <div class="weather-stat-label">Wind</div>
+                </div>
+                <div class="weather-stat">
+                  <div class="weather-stat-icon">\u{1f4a7}</div>
+                  <div class="weather-stat-value">${weather.humidity != null ? weather.humidity + '%' : '\u2014'}</div>
+                  <div class="weather-stat-label">Humidity</div>
+                </div>
+                <div class="weather-stat">
+                  <div class="weather-stat-icon">\u{1f327}\ufe0f</div>
+                  <div class="weather-stat-value">${weather.rainfall != null ? (weather.rainfall > 0 ? 'Yes' : 'No') : '\u2014'}</div>
+                  <div class="weather-stat-label">Rain</div>
+                </div>
+                <div class="weather-stat">
+                  <div class="weather-stat-icon">\u{1f535}</div>
+                  <div class="weather-stat-value">${weather.pressure != null ? weather.pressure + ' hPa' : '\u2014'}</div>
+                  <div class="weather-stat-label">Pressure</div>
+                </div>
+              </div>
+            `}
+          </div>
+        </div>
+
+        <div class="live-panel panel-race-control">
+          <div class="live-panel-header">
+            <h3 class="live-panel-title">Race Control</h3>
+            ${raceControl.length > 0 && html`<span class="live-panel-subtitle">${raceControl.length} messages</span>`}
+          </div>
+          <div class="live-panel-body">
+            ${raceControl.length === 0 ? html`
+              <div style=${{ padding: '24px', textAlign: 'center', color: 'var(--color-text-muted)' }}>No messages yet</div>
+            ` : html`
+              <div class="rc-messages">
+                ${[...raceControl].reverse().slice(0, 30).map((msg, i) => {
+                  const flagClass = getFlagClass(msg.flag || msg.category || '');
+                  return html`
+                    <div key=${i} class="rc-message">
+                      <div class=${`rc-message-flag ${flagClass}`} />
+                      <div class="rc-message-content">
+                        <div class="rc-message-text">${msg.message || msg.category || '\u2014'}</div>
+                        <div class="rc-message-meta">
+                          ${msg.lap_number ? 'Lap ' + msg.lap_number : ''}
+                          ${msg.date ? ' \u00b7 ' + new Date(msg.date).toLocaleTimeString() : ''}
+                        </div>
+                      </div>
+                    </div>
+                  `;
+                })}
+              </div>
+            `}
+          </div>
+        </div>
+
+        <div class="live-panel panel-stints">
+          <div class="live-panel-header">
+            <h3 class="live-panel-title">Tyre Strategy</h3>
+          </div>
+          <div class="live-panel-body">
+            ${stints.length === 0 ? html`
+              <div style=${{ padding: '24px', textAlign: 'center', color: 'var(--color-text-muted)' }}>No stint data</div>
+            ` : html`<${StintTimeline} stints=${stints} getDriverInfo=${getDriverInfo} totalLaps=${totalLaps} />`}
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 
 // ===== CHAMPIONSHIPS VIEW =====
 
@@ -2190,6 +2776,7 @@ function App() {
 
   const renderPage = () => {
     const path = route === '/calendar' ? '/' : route;
+    if (path === '/live') return html`<${LiveDashboard} />`;
     if (path === '/rankings') return html`<${RankingsView} />`;
     if (path === '/leaderboard') return html`<${LeaderboardView} />`;
     if (path === '/championships') return html`<${ChampionshipsView} />`;
