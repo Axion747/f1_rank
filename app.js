@@ -1390,9 +1390,10 @@ function RaceDetailModal({ race, onClose }) {
         <div class="rdm-tab-bar">
           <button class=${`rdm-tab ${activeTab === 'sessions' ? 'active' : ''}`} onClick=${() => setActiveTab('sessions')}>Sessions</button>
           <button class=${`rdm-tab ${activeTab === 'predict' ? 'active' : ''}`} onClick=${() => setActiveTab('predict')}>Predict</button>
+          <button class=${`rdm-tab ${activeTab === 'market' ? 'active' : ''}`} onClick=${() => setActiveTab('market')}>Market</button>
         </div>
 
-        ${activeTab === 'sessions' ? renderSessionsPanel() : html`
+        ${activeTab === 'market' ? html`<${BettingOddsTab} raceId=${race.id} />` : activeTab === 'sessions' ? renderSessionsPanel() : html`
           <div>
             ${race.sprint && html`
               <div class="rdm-inner-tabs">
@@ -1403,6 +1404,177 @@ function RaceDetailModal({ race, onClose }) {
             ${renderPredictPanel(race.sprint ? sprintTab : 'race')}
           </div>
         `}
+      </div>
+    </div>
+  `;
+}
+
+// ===== BETTING ODDS TAB =====
+
+function DollarIcon() {
+  return html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="12" y1="2" x2="12" y2="22"/>
+    <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
+  </svg>`;
+}
+
+function ExternalLinkIcon() {
+  return html`<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+    <polyline points="15 3 21 3 21 9"/>
+    <line x1="10" y1="14" x2="21" y2="3"/>
+  </svg>`;
+}
+
+// Map Kalshi driver names to our DRIVERS array for team colors
+function matchKalshiDriver(kalshiName) {
+  if (!kalshiName) return null;
+  const kn = kalshiName.toLowerCase().trim();
+  // Try exact last name match first
+  for (const d of DRIVERS) {
+    const lastName = d.name.split(' ').pop().toLowerCase();
+    if (kn.includes(lastName)) return d;
+  }
+  // Handle special cases
+  if (kn.includes('antonelli') || kn.includes('kimi antonelli')) return DRIVERS.find(d => d.name.includes('Antonelli'));
+  if (kn.includes('hulkenberg') || kn.includes('hülkenberg')) return DRIVERS.find(d => d.name.includes('Hülkenberg'));
+  if (kn.includes('perez') || kn.includes('pérez')) return DRIVERS.find(d => d.name.includes('Pérez'));
+  return null;
+}
+
+function BettingOddsTab({ raceId }) {
+  const [oddsData, setOddsData] = useState(null);
+  const [podiumData, setPodiumData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [oddsTab, setOddsTab] = useState('winner');
+
+  useEffect(() => {
+    async function fetchOdds() {
+      setLoading(true);
+      try {
+        const [raceRes, podiumRes] = await Promise.all([
+          fetch(kalshiUrl('race', raceId)).then(r => r.json()).catch(() => ({ markets: [], available: false })),
+          fetch(kalshiUrl('podium', raceId)).then(r => r.json()).catch(() => ({ markets: [], available: false }))
+        ]);
+        setOddsData(raceRes);
+        setPodiumData(podiumRes);
+      } catch {
+        setOddsData({ markets: [], available: false });
+        setPodiumData({ markets: [], available: false });
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchOdds();
+  }, [raceId]);
+
+  if (loading) return html`<div class="spinner"></div>`;
+
+  const raceAvailable = oddsData && oddsData.available && oddsData.markets.length > 0;
+  const podiumAvailable = podiumData && podiumData.available && podiumData.markets.length > 0;
+
+  if (!raceAvailable && !podiumAvailable) {
+    return html`
+      <div class="betting-unavailable">
+        <div class="betting-unavailable-icon"><${DollarIcon} /></div>
+        <div class="betting-unavailable-title">Market odds not yet available</div>
+        <p class="betting-unavailable-text">
+          Kalshi prediction markets for this race haven't opened yet. Markets typically open closer to the race weekend.
+        </p>
+        <a class="betting-kalshi-link" href="https://kalshi.com/browse/sports/formula-1" target="_blank" rel="noopener noreferrer">
+          View all F1 markets on Kalshi <${ExternalLinkIcon} />
+        </a>
+      </div>
+    `;
+  }
+
+  const activeMarkets = oddsTab === 'winner' ? (oddsData?.markets || []) : (podiumData?.markets || []);
+  const topOdds = activeMarkets.filter(m => m.last_price > 0 || m.yes_ask > 0);
+  // Separate drivers with real odds from 1c "longshots"
+  const significantOdds = topOdds.filter(m => m.last_price > 1 || m.yes_ask > 1);
+  const longshots = topOdds.filter(m => m.last_price <= 1 && m.yes_ask <= 1);
+
+  return html`
+    <div class="betting-container">
+      <div class="betting-header">
+        <div class="betting-header-left">
+          <span class="betting-source">Powered by</span>
+          <a class="betting-kalshi-brand" href="https://kalshi.com/browse/sports/formula-1" target="_blank" rel="noopener noreferrer">
+            Kalshi
+          </a>
+        </div>
+        <div class="betting-header-right">
+          <span class="betting-update-note">Live market data</span>
+        </div>
+      </div>
+
+      ${(raceAvailable && podiumAvailable) ? html`
+        <div class="betting-tabs">
+          <button class=${`betting-tab ${oddsTab === 'winner' ? 'active' : ''}`} onClick=${() => setOddsTab('winner')}>Race Winner</button>
+          <button class=${`betting-tab ${oddsTab === 'podium' ? 'active' : ''}`} onClick=${() => setOddsTab('podium')}>Podium Finish</button>
+        </div>
+      ` : html`
+        <div class="betting-section-label">${raceAvailable ? 'Race Winner' : 'Podium Finish'}</div>
+      `}
+
+      ${significantOdds.length > 0 ? html`
+        <div class="betting-odds-list">
+          ${significantOdds.map((m, i) => {
+            const driver = matchKalshiDriver(m.driver);
+            const team = driver ? getTeam(driver.team) : null;
+            const impliedProb = m.last_price; // cents = percentage
+            const barPct = Math.min(impliedProb, 100);
+            return html`
+              <div key=${m.ticker || i} class="betting-odds-row">
+                <div class="betting-odds-rank">${i + 1}</div>
+                <div class="betting-odds-driver">
+                  ${team ? html`<${TeamDot} teamId=${driver.team} size=${10} />` : html`<span class="betting-dot-placeholder"></span>`}
+                  <span class="betting-driver-name">${m.driver}</span>
+                  <span class="betting-driver-team">${m.team || (team ? team.name : '')}</span>
+                </div>
+                <div class="betting-odds-bar-wrapper">
+                  <div class="betting-odds-bar" style=${{ width: `${barPct}%`, background: team ? team.color : 'var(--color-primary)' }}></div>
+                </div>
+                <div class="betting-odds-values">
+                  <span class="betting-implied-prob">${impliedProb}%</span>
+                  <span class="betting-price">${m.yes_bid}¢ / ${m.yes_ask}¢</span>
+                </div>
+              </div>
+            `;
+          })}
+        </div>
+      ` : null}
+
+      ${longshots.length > 0 ? html`
+        <details class="betting-longshots">
+          <summary class="betting-longshots-toggle">
+            ${longshots.length} longshot${longshots.length > 1 ? 's' : ''} at 1¢ or less
+          </summary>
+          <div class="betting-longshots-list">
+            ${longshots.map((m, i) => {
+              const driver = matchKalshiDriver(m.driver);
+              const team = driver ? getTeam(driver.team) : null;
+              return html`
+                <div key=${m.ticker || i} class="betting-longshot-row">
+                  ${team ? html`<${TeamDot} teamId=${driver.team} size=${8} />` : null}
+                  <span class="betting-longshot-name">${m.driver}</span>
+                  <span class="betting-longshot-price">≤1¢</span>
+                </div>
+              `;
+            })}
+          </div>
+        </details>
+      ` : null}
+
+      <div class="betting-legend">
+        <div class="betting-legend-item">
+          <span class="betting-legend-label">Implied probability</span>
+          <span class="betting-legend-desc">= last traded price in cents (e.g. 25¢ = 25%)</span>
+        </div>
+        <div class="betting-legend-item">
+          <span class="betting-legend-label">Bid / Ask</span>
+          <span class="betting-legend-desc">= current buy/sell prices</span>
+        </div>
       </div>
     </div>
   `;
@@ -1422,6 +1594,21 @@ function AuthGate() {
 // ===== OPENF1 DIRECT FETCH =====
 
 const OPENF1_BASE = 'https://api.openf1.org/v1';
+// Kalshi API: use Vercel serverless function on production, local proxy on sandbox
+const KALSHI_API = '__PORT_8000__';
+// When deployed via Perplexity, __PORT_8000__ gets replaced with 'port/8000'
+// When deployed via Vercel, it stays as the literal string '__PORT_8000__'
+const KALSHI_HAS_PROXY = KALSHI_API !== '__' + 'PORT_8000__'; // true when proxy is available
+function kalshiUrl(type, raceId) {
+  if (KALSHI_HAS_PROXY) {
+    // Sandbox deploy with proxy server
+    if (type === 'championship') return `${KALSHI_API}/api/kalshi/championship`;
+    return `${KALSHI_API}/api/kalshi/${type}/${raceId}`;
+  }
+  // Vercel deploy — use serverless function
+  if (type === 'championship') return `/api/kalshi?type=championship`;
+  return `/api/kalshi?type=${type}&race_id=${raceId}`;
+}
 
 async function openF1Fetch(endpoint, params = {}) {
   const qs = Object.entries(params).map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&');
@@ -1504,12 +1691,12 @@ function RankingsView() {
   // Number of positions depends on race type
   const numPositions = raceType === 'sprint' ? 8 : 10;
 
-  // Power Rankings — aggregate F1 points from all users' picks
+  // Power Rankings — aggregate F1 points from all users' picks, top 10 only
   const powerScores = useMemo(() => {
     if (users.length === 0) return [];
     const pointsTable = raceType === 'sprint' ? SPRINT_POINTS : POINTS;
     const driverPts = {};
-    const maxPossible = users.length * pointsTable[0]; // max = all users pick driver at P1
+    const maxPossible = users.length * pointsTable[0]; // theoretical max = every user picks this driver P1
     users.forEach(u => {
       for (let pos = 1; pos <= numPositions; pos++) {
         const did = userRankings[u][pos];
@@ -1518,16 +1705,14 @@ function RankingsView() {
         }
       }
     });
-    const sorted = Object.entries(driverPts)
+    return Object.entries(driverPts)
       .map(([driverId, pts]) => ({
         driverId: Number(driverId),
         rawPoints: pts,
         score: Math.round((pts / maxPossible) * 1000)
       }))
-      .sort((a, b) => b.rawPoints - a.rawPoints);
-    // Normalize: top driver = 1000
-    const topPts = sorted[0]?.rawPoints || 1;
-    return sorted.map(d => ({ ...d, score: Math.round((d.rawPoints / topPts) * 1000) }));
+      .sort((a, b) => b.rawPoints - a.rawPoints)
+      .slice(0, 10);
   }, [users, userRankings, raceType, numPositions]);
 
   return html`
@@ -1592,7 +1777,7 @@ function RankingsView() {
           <div class="consensus-section">
             <h3 class="consensus-title">Power Rankings${raceType === 'sprint' ? ' — Sprint' : ''}</h3>
             <p style=${{ color: 'var(--color-text-muted)', fontSize: 'var(--text-sm)', marginBottom: 'var(--space-5)', marginTop: 'calc(-1 * var(--space-2))' }}>
-              Aggregated from ${users.length} ${users.length === 1 ? 'prediction' : 'predictions'} using F1 points (${raceType === 'sprint' ? '8-7-6-5-4-3-2-1' : '25-18-15-12-10-8-6-4-2-1'}). Top driver = 1000.
+              Aggregated from ${users.length} ${users.length === 1 ? 'prediction' : 'predictions'} using F1 points (${raceType === 'sprint' ? '8-7-6-5-4-3-2-1' : '25-18-15-12-10-8-6-4-2-1'}). Score out of 1000 — a perfect 1000 means every user ranked this driver P1.
             </p>
             <div class="power-rankings-list">
               ${powerScores.map((entry, i) => {
