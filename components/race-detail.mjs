@@ -5,11 +5,21 @@ import {
   useMemo,
   useState,
 } from '../lib/core.mjs';
-import { fetchRaceSessions, openF1Fetch, useAuth, useDialog, useToast } from '../lib/app-utils.mjs';
 import {
+  fetchRaceSessions,
+  loadRankingsWithProfiles,
+  openF1Fetch,
+  useAuth,
+  useDialog,
+  useToast,
+} from '../lib/app-utils.mjs';
+import {
+  buildConsensusSnapshot,
+  computeConsensusAccuracy,
   formatDateTime,
   formatLapTime,
   formatRelativeDeadline,
+  getDriver,
   getDriverByNumber,
   getPredictionLock,
   getTeam,
@@ -24,6 +34,7 @@ import {
   LocationIcon,
   Spinner,
   TeamDot,
+  UsernameLink,
 } from './app-components.mjs';
 
 function formatSessionDisplayName(session) {
@@ -64,6 +75,12 @@ function buildSessionDriverMap(drivers) {
   return driverMap;
 }
 
+function getDriverLastName(driver) {
+  if (!driver?.name) return 'Unknown';
+  const parts = driver.name.trim().split(/\s+/);
+  return parts[parts.length - 1] || driver.name;
+}
+
 export function RaceDetailModal({ race, onClose, defaultTab = 'predict' }) {
   const auth = useAuth();
   const showToast = useToast();
@@ -88,9 +105,17 @@ export function RaceDetailModal({ race, onClose, defaultTab = 'predict' }) {
   const [lapsError, setLapsError] = useState('');
   const [sessionRefreshKey, setSessionRefreshKey] = useState(0);
   const [lapRefreshKey, setLapRefreshKey] = useState(0);
+  const [consensusState, setConsensusState] = useState({
+    actualResults: [],
+    error: '',
+    loading: false,
+    rankings: [],
+  });
+  const [consensusRefreshKey, setConsensusRefreshKey] = useState(0);
 
   const raceLock = getPredictionLock(race, 'race');
   const sprintLock = race.sprint ? getPredictionLock(race, 'sprint') : null;
+  const activeRaceType = race.sprint ? raceTypeTab : 'race';
 
   useEffect(() => {
     setGpSelections(Array(10).fill(''));
@@ -100,6 +125,12 @@ export function RaceDetailModal({ race, onClose, defaultTab = 'predict' }) {
     setSessionLaps([]);
     setSessionDrivers([]);
     setLapsError('');
+    setConsensusState({
+      actualResults: [],
+      error: '',
+      loading: false,
+      rankings: [],
+    });
   }, [race.id]);
 
   useEffect(() => {
@@ -159,6 +190,57 @@ export function RaceDetailModal({ race, onClose, defaultTab = 'predict' }) {
       cancelled = true;
     };
   }, [activeTab, auth.session, race.id, race.sprint, showToast]);
+
+  useEffect(() => {
+    if (activeTab !== 'consensus') return undefined;
+    let cancelled = false;
+
+    async function loadConsensus() {
+      setConsensusState({
+        actualResults: [],
+        error: '',
+        loading: true,
+        rankings: [],
+      });
+
+      try {
+        const [rankings, resultsResponse] = await Promise.all([
+          loadRankingsWithProfiles(race.id, activeRaceType),
+          supabase
+            .from('actual_results')
+            .select('race_id, position, driver_id, race_type')
+            .eq('race_id', race.id)
+            .eq('race_type', activeRaceType)
+            .order('position'),
+        ]);
+        if (cancelled) return;
+
+        if (resultsResponse.error) throw resultsResponse.error;
+
+        setConsensusState({
+          actualResults: resultsResponse.data || [],
+          error: '',
+          loading: false,
+          rankings: rankings || [],
+        });
+      } catch (loadError) {
+        if (cancelled) return;
+        setConsensusState({
+          actualResults: [],
+          error:
+            loadError.message ||
+            'Public picks could not be loaded right now. Please try again.',
+          loading: false,
+          rankings: [],
+        });
+      }
+    }
+
+    loadConsensus();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeRaceType, activeTab, consensusRefreshKey, race.id]);
 
   useEffect(() => {
     if (activeTab !== 'sessions') return undefined;
@@ -259,6 +341,55 @@ export function RaceDetailModal({ race, onClose, defaultTab = 'predict' }) {
     () => buildSessionDriverMap(sessionDrivers),
     [sessionDrivers],
   );
+  const consensusSnapshot = useMemo(
+    () => buildConsensusSnapshot(consensusState.rankings, activeRaceType),
+    [activeRaceType, consensusState.rankings],
+  );
+  const consensusAccuracy = useMemo(
+    () =>
+      computeConsensusAccuracy(
+        consensusState.rankings,
+        consensusState.actualResults,
+        activeRaceType,
+        race.id,
+      ),
+    [activeRaceType, consensusState.actualResults, consensusState.rankings, race.id],
+  );
+  const publicPickGroups = useMemo(() => {
+    const grouped = new Map();
+    const visibleRankings = (consensusState.rankings || []).filter(
+      (ranking) => !auth.session || ranking.user_id !== auth.session.user.id,
+    );
+
+    visibleRankings.forEach((ranking) => {
+      const key = ranking.user_id || ranking._username || 'unknown';
+      if (!grouped.has(key)) {
+        grouped.set(key, {
+          displayName: ranking._display_name || ranking._username || 'Unknown player',
+          picks: {},
+          totalPicks: 0,
+          username: ranking._username || '',
+        });
+      }
+
+      const current = grouped.get(key);
+      current.picks[ranking.position] = Number(ranking.driver_id);
+      current.totalPicks += 1;
+    });
+
+    return [...grouped.values()].sort((left, right) =>
+      left.displayName.localeCompare(right.displayName),
+    );
+  }, [auth.session?.user?.id, consensusState.rankings]);
+  const topPodiumChoice = useMemo(() => {
+    if (!consensusSnapshot.entries.length) return null;
+    return [...consensusSnapshot.entries].sort(
+      (left, right) =>
+        right.podiumShare - left.podiumShare ||
+        right.rawPoints - left.rawPoints ||
+        left.avgPosition - right.avgPosition,
+    )[0];
+  }, [consensusSnapshot.entries]);
 
   const driverBestLaps = useMemo(() => {
     if (!sessionLaps.length) return [];
@@ -426,6 +557,308 @@ export function RaceDetailModal({ race, onClose, defaultTab = 'predict' }) {
               : `Save ${isSprint ? 'Sprint' : 'GP'} Picks`}
         </button>
       </div>
+    </div>`;
+  };
+
+  const renderConsensusPanel = () => {
+    const sessionSubject = activeRaceType === 'sprint' ? 'sprint' : 'Grand Prix';
+    const consensusLeader = consensusSnapshot.entries[0]
+      ? getDriver(consensusSnapshot.entries[0].driverId)
+      : null;
+    const podiumFavoriteDriver = topPodiumChoice ? getDriver(topPodiumChoice.driverId) : null;
+
+    if (consensusState.loading) return html`<${Spinner} />`;
+
+    if (consensusState.error) {
+      return html`<div>
+        ${race.sprint &&
+        html`<div class="rdm-inner-tabs">
+          <button
+            class=${`rdm-inner-tab ${raceTypeTab === 'sprint' ? 'active' : ''}`}
+            onClick=${() => setRaceTypeTab('sprint')}
+          >
+            Sprint
+          </button>
+          <button
+            class=${`rdm-inner-tab ${raceTypeTab === 'race' ? 'active' : ''}`}
+            onClick=${() => setRaceTypeTab('race')}
+          >
+            Grand Prix
+          </button>
+        </div>`}
+        <${InlineMessage}
+          title="Public picks unavailable"
+          text=${consensusState.error}
+          action=${html`<button
+            class="btn btn-secondary"
+            onClick=${() => setConsensusRefreshKey((current) => current + 1)}
+          >
+            Retry
+          </button>`}
+        />
+      </div>`;
+    }
+
+    if (!consensusSnapshot.ballotCount) {
+      return html`<div>
+        ${race.sprint &&
+        html`<div class="rdm-inner-tabs">
+          <button
+            class=${`rdm-inner-tab ${raceTypeTab === 'sprint' ? 'active' : ''}`}
+            onClick=${() => setRaceTypeTab('sprint')}
+          >
+            Sprint
+          </button>
+          <button
+            class=${`rdm-inner-tab ${raceTypeTab === 'race' ? 'active' : ''}`}
+            onClick=${() => setRaceTypeTab('race')}
+          >
+            Grand Prix
+          </button>
+        </div>`}
+        <${InlineMessage}
+          title="No public picks yet"
+          text=${`Once people submit their ${sessionSubject} picks, the crowd board will appear here.`}
+        />
+      </div>`;
+    }
+
+    return html`<div class="rdm-consensus-layout">
+      ${race.sprint &&
+      html`<div class="rdm-inner-tabs">
+        <button
+          class=${`rdm-inner-tab ${raceTypeTab === 'sprint' ? 'active' : ''}`}
+          onClick=${() => setRaceTypeTab('sprint')}
+        >
+          Sprint
+        </button>
+        <button
+          class=${`rdm-inner-tab ${raceTypeTab === 'race' ? 'active' : ''}`}
+          onClick=${() => setRaceTypeTab('race')}
+        >
+          Grand Prix
+        </button>
+      </div>`}
+
+      <div class="rdm-consensus-summary">
+        <div class="rdm-consensus-card">
+          <span class="rdm-consensus-card-label">Ballots</span>
+          <strong class="rdm-consensus-card-value">${consensusSnapshot.ballotCount}</strong>
+          <span class="rdm-consensus-card-copy">Submitted ${sessionSubject} boards</span>
+        </div>
+        <div class="rdm-consensus-card">
+          <span class="rdm-consensus-card-label">Consensus Leader</span>
+          <strong class="rdm-consensus-card-value">
+            ${consensusLeader ? getDriverLastName(consensusLeader) : '-'}
+          </strong>
+          <span class="rdm-consensus-card-copy">Most common winner pick right now</span>
+        </div>
+        <div class="rdm-consensus-card">
+          <span class="rdm-consensus-card-label">Strongest Podium Case</span>
+          <strong class="rdm-consensus-card-value">
+            ${topPodiumChoice ? `${topPodiumChoice.podiumShare}%` : '-'}
+          </strong>
+          <span class="rdm-consensus-card-copy">
+            ${podiumFavoriteDriver ? getDriverLastName(podiumFavoriteDriver) : 'Waiting on picks'}
+          </span>
+        </div>
+        <div class="rdm-consensus-card">
+          <span class="rdm-consensus-card-label">Public Accuracy</span>
+          <strong class="rdm-consensus-card-value">
+            ${consensusAccuracy ? `${consensusAccuracy.accuracy}%` : 'Pending'}
+          </strong>
+          <span class="rdm-consensus-card-copy">
+            ${consensusAccuracy
+              ? `${consensusAccuracy.total_correct}/${consensusAccuracy.total_predictions} exact hits`
+              : 'Official results needed'}
+          </span>
+        </div>
+      </div>
+
+      <section class="rdm-consensus-section">
+        <div class="rdm-consensus-section-header">
+          <div>
+            <h3 class="rdm-consensus-section-title">Crowd Power Ratings</h3>
+            <p class="rdm-consensus-section-copy">
+              Power is normalized to 100 using official F1 points from every submitted ballot.
+              Podium share shows how often each driver is placed in the top three.
+            </p>
+          </div>
+        </div>
+        <div class="rdm-consensus-list">
+          ${consensusSnapshot.entries
+            .slice(0, consensusSnapshot.positionsLimit)
+            .map((entry, index) => {
+              const driver = getDriver(entry.driverId);
+              const team = driver ? getTeam(driver.team) : null;
+              const barWidth = Math.max(entry.powerRating, 4);
+
+              return html`<div key=${entry.driverId} class="rdm-consensus-row">
+                <div class="rdm-consensus-rank">
+                  <span class=${`pos-cell ${index < 3 ? `pos-${index + 1}` : ''}`}>
+                    ${index + 1}
+                  </span>
+                </div>
+                <div class="rdm-consensus-driver">
+                  ${team && driver && html`<${TeamDot} teamId=${driver.team} size=${10} />`}
+                  <div class="rdm-consensus-driver-copy">
+                    <span class="rdm-consensus-driver-name">
+                      ${driver ? driver.name : `Driver ${entry.driverId}`}
+                    </span>
+                    <span class="rdm-consensus-driver-team">${team ? team.name : 'Unknown team'}</span>
+                  </div>
+                </div>
+                <div class="rdm-consensus-track">
+                  <div
+                    class="rdm-consensus-track-bar"
+                    style=${{
+                      background: team ? team.color : 'var(--color-primary)',
+                      width: `${barWidth}%`,
+                    }}
+                  ></div>
+                </div>
+                <div class="rdm-consensus-metrics">
+                  <div class="rdm-consensus-metric">
+                    <span>Power</span>
+                    <strong>${entry.powerRating.toFixed(1)}</strong>
+                  </div>
+                  <div class="rdm-consensus-metric">
+                    <span>Podium</span>
+                    <strong>${entry.podiumShare}%</strong>
+                  </div>
+                  <div class="rdm-consensus-metric">
+                    <span>Avg Pick</span>
+                    <strong>${entry.avgPosition !== null ? `P${entry.avgPosition}` : '-'}</strong>
+                  </div>
+                </div>
+              </div>`;
+            })}
+        </div>
+      </section>
+
+      <section class="rdm-consensus-section">
+        <div class="rdm-consensus-section-header">
+          <div>
+            <h3 class="rdm-consensus-section-title">Public Consensus Accuracy</h3>
+            <p class="rdm-consensus-section-copy">
+              Once official results are stored, the crowd gets scored on exact position matches,
+              average miss, and podium hits.
+            </p>
+          </div>
+        </div>
+        ${consensusAccuracy
+          ? html`<div class="rdm-consensus-accuracy-block">
+              <div class="rdm-consensus-accuracy-grid">
+                <div class="rdm-consensus-card rdm-consensus-card-accent">
+                  <span class="rdm-consensus-card-label">Exact Match Rate</span>
+                  <div class="accuracy-bar-wrapper">
+                    <div class="accuracy-bar">
+                      <div
+                        class="accuracy-bar-fill"
+                        style=${{
+                          width: `${Math.min(consensusAccuracy.accuracy, 100)}%`,
+                        }}
+                      ></div>
+                    </div>
+                    <span class="accuracy-bar-text">${consensusAccuracy.accuracy}%</span>
+                  </div>
+                </div>
+                <div class="rdm-consensus-card">
+                  <span class="rdm-consensus-card-label">Average Miss</span>
+                  <strong class="rdm-consensus-card-value">
+                    ${consensusAccuracy.position_diff_avg}
+                  </strong>
+                  <span class="rdm-consensus-card-copy">Positions away from the real order</span>
+                </div>
+                <div class="rdm-consensus-card">
+                  <span class="rdm-consensus-card-label">Podium Hits</span>
+                  <strong class="rdm-consensus-card-value">
+                    ${consensusAccuracy.podium_hits}/3
+                  </strong>
+                  <span class="rdm-consensus-card-copy">
+                    ${consensusAccuracy.exact_podium ? 'Exact podium nailed' : 'Correct names, any order'}
+                  </span>
+                </div>
+              </div>
+              <div class="rdm-consensus-podium-grid">
+                <div class="rdm-consensus-podium-card">
+                  <span class="rdm-consensus-card-label">Consensus Podium</span>
+                  <div class="rdm-consensus-podium-list">
+                    ${consensusAccuracy.consensus_podium.map((driverId, index) => {
+                      const driver = getDriver(driverId);
+                      return html`<span key=${`consensus-${driverId}`} class="rdm-consensus-podium-chip">
+                        <span class="rdm-public-pick-position">P${index + 1}</span>
+                        <span>${driver ? getDriverLastName(driver) : `#${driverId}`}</span>
+                      </span>`;
+                    })}
+                  </div>
+                </div>
+                <div class="rdm-consensus-podium-card">
+                  <span class="rdm-consensus-card-label">Actual Podium</span>
+                  <div class="rdm-consensus-podium-list">
+                    ${consensusAccuracy.actual_podium.map((driverId, index) => {
+                      const driver = getDriver(driverId);
+                      return html`<span key=${`actual-${driverId}`} class="rdm-consensus-podium-chip">
+                        <span class="rdm-public-pick-position">P${index + 1}</span>
+                        <span>${driver ? getDriverLastName(driver) : `#${driverId}`}</span>
+                      </span>`;
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>`
+          : html`<div class="rdm-consensus-empty">
+              Official ${sessionSubject} results have not been stored yet, so crowd accuracy is still pending.
+            </div>`}
+      </section>
+
+      <section class="rdm-consensus-section">
+        <div class="rdm-consensus-section-header">
+          <div>
+            <h3 class="rdm-consensus-section-title">What Everyone Picked</h3>
+            <p class="rdm-consensus-section-copy">
+              ${auth.session
+                ? 'Your own ballot is hidden here so you only see the rest of the room.'
+                : `Every submitted ${sessionSubject} ballot is shown below.`}
+            </p>
+          </div>
+        </div>
+        ${publicPickGroups.length
+          ? html`<div class="rdm-public-picks-grid">
+              ${publicPickGroups.map((group) => html`<div
+                key=${group.username || group.displayName}
+                class="rdm-public-pick-card"
+              >
+                <div class="rdm-public-pick-card-header">
+                  ${group.username
+                    ? html`<${UsernameLink}
+                        username=${group.username}
+                        displayName=${group.displayName}
+                      />`
+                    : html`<span class="rdm-public-pick-name">${group.displayName}</span>`}
+                  <span class="rdm-public-pick-count">${group.totalPicks} picks</span>
+                </div>
+                <div class="rdm-public-pick-grid">
+                  ${Array.from({ length: consensusSnapshot.positionsLimit }, (_, index) => {
+                    const position = index + 1;
+                    const driver = getDriver(group.picks[position]);
+                    const team = driver ? getTeam(driver.team) : null;
+
+                    return html`<div key=${position} class="rdm-public-pick-pill">
+                      <span class="rdm-public-pick-position">P${position}</span>
+                      <span class="rdm-public-pick-driver">
+                        ${team && driver && html`<${TeamDot} teamId=${driver.team} size=${8} />`}
+                        <span>${driver ? getDriverLastName(driver) : '-'}</span>
+                      </span>
+                    </div>`;
+                  })}
+                </div>
+              </div>`) }
+            </div>`
+          : html`<div class="rdm-consensus-empty">
+              No one else has submitted a ${sessionSubject} ballot for this race yet.
+            </div>`}
+      </section>
     </div>`;
   };
 
@@ -619,6 +1052,12 @@ export function RaceDetailModal({ race, onClose, defaultTab = 'predict' }) {
           Predict
         </button>
         <button
+          class=${`rdm-tab ${activeTab === 'consensus' ? 'active' : ''}`}
+          onClick=${() => setActiveTab('consensus')}
+        >
+          Consensus
+        </button>
+        <button
           class=${`rdm-tab ${activeTab === 'sessions' ? 'active' : ''}`}
           onClick=${() => setActiveTab('sessions')}
         >
@@ -636,30 +1075,32 @@ export function RaceDetailModal({ race, onClose, defaultTab = 'predict' }) {
         ? html`<${BettingOddsTab} raceId=${race.id} />`
         : activeTab === 'sessions'
           ? renderSessionsPanel()
-          : html`<div>
-              ${race.sprint &&
-              html`<div class="rdm-inner-tabs">
-                <button
-                  class=${`rdm-inner-tab ${raceTypeTab === 'sprint' ? 'active' : ''}`}
-                  onClick=${() => setRaceTypeTab('sprint')}
-                >
-                  Sprint
-                  <span class=${`prediction-status-pill ${sprintLock?.isLocked ? 'locked' : 'open'}`}>
-                    ${sprintLock?.isLocked ? 'Locked' : 'Open'}
-                  </span>
-                </button>
-                <button
-                  class=${`rdm-inner-tab ${raceTypeTab === 'race' ? 'active' : ''}`}
-                  onClick=${() => setRaceTypeTab('race')}
-                >
-                  Grand Prix
-                  <span class=${`prediction-status-pill ${raceLock.isLocked ? 'locked' : 'open'}`}>
-                    ${raceLock.isLocked ? 'Locked' : 'Open'}
-                  </span>
-                </button>
+          : activeTab === 'consensus'
+            ? renderConsensusPanel()
+            : html`<div>
+                ${race.sprint &&
+                html`<div class="rdm-inner-tabs">
+                  <button
+                    class=${`rdm-inner-tab ${raceTypeTab === 'sprint' ? 'active' : ''}`}
+                    onClick=${() => setRaceTypeTab('sprint')}
+                  >
+                    Sprint
+                    <span class=${`prediction-status-pill ${sprintLock?.isLocked ? 'locked' : 'open'}`}>
+                      ${sprintLock?.isLocked ? 'Locked' : 'Open'}
+                    </span>
+                  </button>
+                  <button
+                    class=${`rdm-inner-tab ${raceTypeTab === 'race' ? 'active' : ''}`}
+                    onClick=${() => setRaceTypeTab('race')}
+                  >
+                    Grand Prix
+                    <span class=${`prediction-status-pill ${raceLock.isLocked ? 'locked' : 'open'}`}>
+                      ${raceLock.isLocked ? 'Locked' : 'Open'}
+                    </span>
+                  </button>
+                </div>`}
+                ${renderPredictionPanel(activeRaceType)}
               </div>`}
-              ${renderPredictionPanel(race.sprint ? raceTypeTab : 'race')}
-            </div>`}
     </div>
   </div>`;
 }
