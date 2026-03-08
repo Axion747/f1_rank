@@ -443,7 +443,11 @@ export function LiveDashboard() {
       } catch (loadError) {
         if (!cancelled) {
           setSessions([]);
-          setLoadError(loadError.message || 'Unable to load session data.');
+          const msg = loadError.message || '';
+          const isNoData = /404|not found|unexpected payload/i.test(msg);
+          if (!isNoData) {
+            setLoadError(msg || 'Unable to load session data.');
+          }
         }
       } finally {
         if (!cancelled) setLoading(false);

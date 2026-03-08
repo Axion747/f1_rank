@@ -14,6 +14,7 @@ export function Navbar({ route }) {
     { path: '/', label: 'Calendar' },
     { path: '/leaderboard', label: 'Leaderboard' },
     { path: '/championships', label: 'Standings' },
+    { path: '/rankings', label: 'Rankings', secondary: true },
     { path: '/live', label: 'Live', secondary: liveIsSecondary },
   ];
 

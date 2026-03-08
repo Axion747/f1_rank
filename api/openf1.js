@@ -55,8 +55,14 @@ async function getToken() {
 }
 
 module.exports = async function handler(req, res) {
-  // CORS
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  // CORS — restrict to own domain when ALLOWED_ORIGIN is set
+  const allowedOrigin = process.env.ALLOWED_ORIGIN || "";
+  const requestOrigin = req.headers.origin || "";
+  if (allowedOrigin && requestOrigin === allowedOrigin) {
+    res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
+  } else if (!allowedOrigin) {
+    res.setHeader("Access-Control-Allow-Origin", requestOrigin || "*");
+  }
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   if (req.method === "OPTIONS") return res.status(200).end();
