@@ -303,30 +303,43 @@ export function RaceDetailModal({ race, onClose, defaultTab = 'predict' }) {
 
     setSavingPredictions(true);
     try {
-      const { error: deleteError } = await supabase
-        .from('rankings')
-        .delete()
-        .eq('user_id', auth.session.user.id)
-        .eq('race_id', race.id)
-        .eq('race_type', raceType);
-      if (deleteError) throw deleteError;
+      const rows = rankings.map((ranking) => ({
+        user_id: auth.session.user.id,
+        race_id: race.id,
+        position: ranking.position,
+        driver_id: ranking.driver_id,
+        race_type: raceType,
+      }));
 
-      const { error: insertError } = await supabase.from('rankings').insert(
-        rankings.map((ranking) => ({
-          user_id: auth.session.user.id,
-          race_id: race.id,
-          position: ranking.position,
-          driver_id: ranking.driver_id,
-          race_type: raceType,
-        })),
-      );
-      if (insertError) throw insertError;
+      // Upsert by the composite unique key (user_id, race_id, position, race_type)
+      const { error: upsertError } = await supabase
+        .from('rankings')
+        .upsert(rows, { onConflict: 'user_id,race_id,position,race_type' });
+      if (upsertError) throw upsertError;
+
+      // Remove positions that are no longer used (user cleared a slot)
+      const usedPositions = rankings.map((r) => r.position);
+      const maxPositions = raceType === 'sprint' ? 8 : 10;
+      const unusedPositions = Array.from(
+        { length: maxPositions },
+        (_, i) => i + 1,
+      ).filter((p) => !usedPositions.includes(p));
+
+      if (unusedPositions.length > 0) {
+        await supabase
+          .from('rankings')
+          .delete()
+          .eq('user_id', auth.session.user.id)
+          .eq('race_id', race.id)
+          .eq('race_type', raceType)
+          .in('position', unusedPositions);
+      }
 
       showToast(
         `${raceType === 'sprint' ? 'Sprint' : 'Grand Prix'} predictions saved.`,
       );
     } catch (saveError) {
-      showToast(saveError.message, 'error');
+      showToast('Unable to save predictions. Please try again.', 'error');
     } finally {
       setSavingPredictions(false);
     }

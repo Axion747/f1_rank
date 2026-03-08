@@ -57,8 +57,14 @@ function normalizeMarket(market, options = {}) {
 }
 
 module.exports = async function handler(req, res) {
-  // CORS headers
-  res.setHeader('Access-Control-Allow-Origin', '*');
+  // CORS — restrict to own domain when ALLOWED_ORIGIN is set
+  const allowedOrigin = process.env.ALLOWED_ORIGIN || "";
+  const requestOrigin = req.headers.origin || "";
+  if (allowedOrigin && requestOrigin === allowedOrigin) {
+    res.setHeader("Access-Control-Allow-Origin", allowedOrigin);
+  } else if (!allowedOrigin) {
+    res.setHeader("Access-Control-Allow-Origin", requestOrigin || "*");
+  }
   res.setHeader('Access-Control-Allow-Methods', 'GET');
   
   const { type, race_id } = req.query;

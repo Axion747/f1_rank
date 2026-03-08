@@ -2,6 +2,19 @@ import { html, supabase, useState } from '../lib/core.mjs';
 import { useDialog, useToast } from '../lib/app-utils.mjs';
 import { CloseIcon } from './app-components.mjs';
 
+const USERNAME_RE = /^[a-zA-Z0-9_]{3,20}$/;
+
+function friendlyAuthError(err) {
+  const msg = err?.message || '';
+  const code = err?.code || '';
+  if (code === '23505' || msg.includes('duplicate')) return 'That username is already taken.';
+  if (msg.includes('Invalid login')) return 'Incorrect email or password.';
+  if (msg.includes('Email not confirmed')) return 'Please confirm your email before signing in.';
+  if (msg.includes('User already registered')) return 'An account with this email already exists.';
+  if (msg.includes('rate limit') || msg.includes('too many')) return 'Too many attempts. Please wait a moment and try again.';
+  return 'Something went wrong. Please try again.';
+}
+
 function AuthModal({ onClose }) {
   const dialogRef = useDialog(onClose);
   const showToast = useToast();
@@ -15,12 +28,39 @@ function AuthModal({ onClose }) {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
+
+    if (mode === 'reset') {
+      if (!email.trim()) {
+        setError('Please enter your email address.');
+        return;
+      }
+      setLoading(true);
+      setError('');
+      try {
+        const { error: resetError } = await supabase.auth.resetPasswordForEmail(
+          email.trim(),
+        );
+        if (resetError) throw resetError;
+        showToast('Password reset link sent. Check your email.', 'info');
+        setMode('login');
+      } catch (submitError) {
+        setError(friendlyAuthError(submitError));
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
     if (!email.trim() || !password.trim()) {
       setError('Please enter an email address and password.');
       return;
     }
     if (mode === 'register' && !username.trim()) {
       setError('Please choose a username.');
+      return;
+    }
+    if (mode === 'register' && !USERNAME_RE.test(username.trim())) {
+      setError('Username must be 3-20 characters using only letters, numbers, and underscores.');
       return;
     }
     if (mode === 'register' && password.length < 8) {
@@ -60,11 +100,19 @@ function AuthModal({ onClose }) {
         onClose();
       }
     } catch (submitError) {
-      setError(submitError.message);
+      setError(friendlyAuthError(submitError));
     } finally {
       setLoading(false);
     }
   };
+
+  const switchMode = (newMode) => {
+    setMode(newMode);
+    setError('');
+  };
+
+  const modalTitle =
+    mode === 'login' ? 'Sign In' : mode === 'register' ? 'Create Account' : 'Reset Password';
 
   return html`<div
     class="modal-overlay open"
@@ -90,9 +138,7 @@ function AuthModal({ onClose }) {
         />
       </div>
       <div class="modal-header">
-        <h2 class="modal-title" id="auth-modal-title">
-          ${mode === 'login' ? 'Sign In' : 'Create Account'}
-        </h2>
+        <h2 class="modal-title" id="auth-modal-title">${modalTitle}</h2>
         <button class="modal-close" onClick=${onClose} aria-label="Close">
           <${CloseIcon} />
         </button>
@@ -119,10 +165,11 @@ function AuthModal({ onClose }) {
             <input
               class="form-input"
               type="text"
-              placeholder="Pick a username"
+              placeholder="Letters, numbers, underscores (3-20)"
               value=${username}
               onInput=${(event) => setUsername(event.target.value)}
               autocomplete="username"
+              maxlength="20"
             />
           </div>
           <div class="form-group">
@@ -140,7 +187,8 @@ function AuthModal({ onClose }) {
           </div>
         `}
 
-        <div class="form-group">
+        ${mode !== 'reset' &&
+        html`<div class="form-group">
           <label class="form-label">Password</label>
           <input
             class="form-input"
@@ -150,7 +198,7 @@ function AuthModal({ onClose }) {
             onInput=${(event) => setPassword(event.target.value)}
             autocomplete=${mode === 'login' ? 'current-password' : 'new-password'}
           />
-        </div>
+        </div>`}
 
         ${error &&
         html`<p class="form-error" style=${{ marginBottom: 'var(--space-4)' }}>
@@ -163,34 +211,36 @@ function AuthModal({ onClose }) {
           style=${{ width: '100%' }}
           disabled=${loading}
         >
-          ${loading ? 'Working...' : mode === 'login' ? 'Sign In' : 'Create Account'}
+          ${loading
+            ? 'Working...'
+            : mode === 'login'
+              ? 'Sign In'
+              : mode === 'register'
+                ? 'Create Account'
+                : 'Send Reset Link'}
         </button>
       </form>
 
       <div class="auth-toggle">
         ${mode === 'login'
-          ? html`Need an account?
-              <button
-                type="button"
-                class="auth-toggle-link"
-                onClick=${() => {
-                  setMode('register');
-                  setError('');
-                }}
-              >
+          ? html`<span>Need an account?
+              <button type="button" class="auth-toggle-link" onClick=${() => switchMode('register')}>
                 Create one
-              </button>`
-          : html`Already have an account?
-              <button
-                type="button"
-                class="auth-toggle-link"
-                onClick=${() => {
-                  setMode('login');
-                  setError('');
-                }}
-              >
-                Sign in
-              </button>`}
+              </button></span>
+              <span style=${{ display: 'block', marginTop: 'var(--space-2)' }}>
+                <button type="button" class="auth-toggle-link" onClick=${() => switchMode('reset')}>
+                  Forgot password?
+                </button>
+              </span>`
+          : mode === 'register'
+            ? html`Already have an account?
+                <button type="button" class="auth-toggle-link" onClick=${() => switchMode('login')}>
+                  Sign in
+                </button>`
+            : html`Back to
+                <button type="button" class="auth-toggle-link" onClick=${() => switchMode('login')}>
+                  Sign in
+                </button>`}
       </div>
     </div>
   </div>`;
@@ -207,4 +257,4 @@ export function AuthGate() {
   </div>`;
 }
 
-export { AuthModal };
+export { AuthModal, friendlyAuthError };

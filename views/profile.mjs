@@ -97,7 +97,7 @@ export function ProfileView({ username }) {
       setEditing(false);
       showToast('Profile updated.');
     } catch (saveError) {
-      showToast(saveError.message, 'error');
+      showToast('Unable to save profile. Please try again.', 'error');
     } finally {
       setSaving(false);
     }

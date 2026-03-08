@@ -1,4 +1,4 @@
-import { html, useMemo, useState } from '../lib/core.mjs';
+import { html, supabase, useEffect, useMemo, useState } from '../lib/core.mjs';
 import { useAuth } from '../lib/app-utils.mjs';
 import { RACES } from '../data/f1-data.mjs';
 import {
@@ -12,7 +12,7 @@ import {
 import { CalendarIcon, LocationIcon } from '../components/app-components.mjs';
 import { RaceDetailModal } from '../components/app-shell.mjs';
 
-function RaceCard({ race, onOpen, isFeatured }) {
+function RaceCard({ race, onOpen, isFeatured, hasPicks }) {
   const status = getRaceCardStatus(race);
   const statusLabel =
     status === 'completed'
@@ -31,6 +31,7 @@ function RaceCard({ race, onOpen, isFeatured }) {
       <span class="race-round">R${String(race.round).padStart(2, '0')}</span>
       <div class="race-card-badges">
         ${race.sprint && html`<span class="sprint-badge">Sprint</span>`}
+        ${hasPicks && html`<span class="race-status-badge race-status-saved">Picks saved</span>`}
         <span class=${`race-status-badge race-status-${status}`}>${statusLabel}</span>
       </div>
     </div>
@@ -45,6 +46,23 @@ function RaceCard({ race, onOpen, isFeatured }) {
 export function CalendarView() {
   const auth = useAuth();
   const [activeRace, setActiveRace] = useState(null);
+  const [pickedRaceIds, setPickedRaceIds] = useState(new Set());
+
+  useEffect(() => {
+    if (!auth.session) {
+      setPickedRaceIds(new Set());
+      return;
+    }
+    supabase
+      .from('rankings')
+      .select('race_id')
+      .eq('user_id', auth.session.user.id)
+      .then(({ data }) => {
+        if (data) {
+          setPickedRaceIds(new Set(data.map((r) => r.race_id)));
+        }
+      });
+  }, [auth.session, activeRace]);
 
   const seasonContext = useMemo(() => getSeasonContext(), []);
   const nextDeadline = useMemo(() => getNextPredictionDeadline(), []);
@@ -114,6 +132,7 @@ export function CalendarView() {
         key=${seasonContext.nextRace.id}
         race=${seasonContext.nextRace}
         isFeatured=${true}
+        hasPicks=${pickedRaceIds.has(seasonContext.nextRace.id)}
         onOpen=${() => setActiveRace(seasonContext.nextRace)}
       />`}
       ${RACES.filter((race) => race.id !== seasonContext.nextRace?.id).map(
@@ -121,6 +140,7 @@ export function CalendarView() {
           key=${race.id}
           race=${race}
           isFeatured=${false}
+          hasPicks=${pickedRaceIds.has(race.id)}
           onOpen=${() => setActiveRace(race)}
         />`,
       )}
