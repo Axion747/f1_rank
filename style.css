@@ -2827,6 +2827,12 @@
   gap: var(--space-3);
 }
 
+.rdm-pick-user-select {
+  flex-shrink: 0;
+  max-width: 180px;
+  font-size: var(--text-sm);
+}
+
 .rdm-consensus-section-title {
   font-family: var(--font-display);
   font-size: var(--text-base);
@@ -2851,6 +2857,7 @@
 .rdm-consensus-row {
   display: grid;
   grid-template-columns: 44px minmax(0, 1fr) minmax(0, 240px);
+  grid-template-rows: auto auto;
   gap: var(--space-3);
   align-items: start;
   padding: var(--space-4);
@@ -2911,6 +2918,7 @@
 }
 
 .rdm-consensus-metrics {
+  grid-column: 2 / -1;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--space-2);
@@ -3058,6 +3066,9 @@
   gap: var(--space-2);
   min-width: 0;
   justify-content: flex-end;
+}
+
+.rdm-public-pick-driver > span:last-child {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

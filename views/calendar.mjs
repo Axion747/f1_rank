@@ -127,19 +127,11 @@ export function CalendarView() {
     </div>
 
     <div class="card-grid">
-      ${seasonContext.nextRace &&
-      html`<${RaceCard}
-        key=${seasonContext.nextRace.id}
-        race=${seasonContext.nextRace}
-        isFeatured=${true}
-        hasPicks=${pickedRaceIds.has(seasonContext.nextRace.id)}
-        onOpen=${() => setActiveRace(seasonContext.nextRace)}
-      />`}
-      ${RACES.filter((race) => race.id !== seasonContext.nextRace?.id).map(
+      ${RACES.map(
         (race) => html`<${RaceCard}
           key=${race.id}
           race=${race}
-          isFeatured=${false}
+          isFeatured=${race.id === seasonContext.nextRace?.id}
           hasPicks=${pickedRaceIds.has(race.id)}
           onOpen=${() => setActiveRace(race)}
         />`,
