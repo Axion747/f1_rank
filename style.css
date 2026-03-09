@@ -1101,7 +1101,7 @@
 
 .power-rank-row {
   display: grid;
-  grid-template-columns: 40px 1fr 1fr 60px;
+  grid-template-columns: 40px 1fr 1fr auto;
   align-items: center;
   gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
@@ -1183,19 +1183,53 @@
   font-variant-numeric: tabular-nums;
 }
 
+.power-rank-metrics {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.power-rank-metric {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.rankings-accuracy-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-1) var(--space-2);
+  background: rgba(0, 210, 190, 0.12);
+  border: 1px solid rgba(0, 210, 190, 0.3);
+  border-radius: var(--radius-full);
+  font-family: var(--font-display);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  color: var(--color-success);
+  font-variant-numeric: tabular-nums;
+}
+
 @media (max-width: 640px) {
   .power-rank-row {
-    grid-template-columns: 32px 1fr 60px;
+    grid-template-columns: 32px 1fr auto;
     gap: var(--space-2);
     padding: var(--space-2) var(--space-3);
   }
-  
+
   .power-rank-bar-wrapper {
     display: none;
   }
-  
+
   .power-rank-team {
     display: none;
+  }
+
+  .power-rank-metrics {
+    flex-direction: column;
+    gap: var(--space-1);
   }
 }
 
@@ -3695,6 +3729,67 @@ details[open] .betting-longshots-toggle::before {
   flex-wrap: wrap;
   margin-bottom: var(--space-5);
   line-height: 1.5;
+}
+
+/* ===== PREDICT COMPARISON VIEW ===== */
+.predict-comparison {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.predict-comparison-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.predict-comparison-table th {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-text-faint);
+}
+
+.predict-comparison-table td {
+  vertical-align: middle;
+}
+
+.predict-match-exact {
+  background: rgba(0, 210, 190, 0.08);
+}
+
+.predict-match-close {
+  background: rgba(255, 242, 0, 0.06);
+}
+
+.predict-match-miss {
+  background: rgba(225, 6, 0, 0.06);
+}
+
+.predict-match-indicator {
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.predict-match-exact .predict-match-indicator {
+  color: var(--color-success);
+}
+
+.predict-match-close .predict-match-indicator {
+  color: var(--color-warning);
+}
+
+.predict-match-miss .predict-match-indicator {
+  color: #ff8b85;
+}
+
+@media (max-width: 600px) {
+  .predict-comparison-stats {
+    grid-template-columns: 1fr;
+  }
 }
 
 .ds-clear-btn {

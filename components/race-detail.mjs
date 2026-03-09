@@ -15,6 +15,7 @@ import {
 } from '../lib/app-utils.mjs';
 import {
   buildConsensusSnapshot,
+  computeAccuracy,
   computeConsensusAccuracy,
   formatDateTime,
   formatLapTime,
@@ -105,6 +106,7 @@ export function RaceDetailModal({ race, onClose, defaultTab = 'predict' }) {
   const [lapsError, setLapsError] = useState('');
   const [sessionRefreshKey, setSessionRefreshKey] = useState(0);
   const [lapRefreshKey, setLapRefreshKey] = useState(0);
+  const [predictActualResults, setPredictActualResults] = useState([]);
   const [consensusState, setConsensusState] = useState({
     actualResults: [],
     error: '',
@@ -131,6 +133,7 @@ export function RaceDetailModal({ race, onClose, defaultTab = 'predict' }) {
       loading: false,
       rankings: [],
     });
+    setPredictActualResults([]);
   }, [race.id]);
 
   useEffect(() => {
@@ -334,6 +337,39 @@ export function RaceDetailModal({ race, onClose, defaultTab = 'predict' }) {
     };
   }, [lapRefreshKey, sessionKey]);
 
+  useEffect(() => {
+    if (activeTab !== 'predict') return undefined;
+    const lockInfo = activeRaceType === 'sprint' ? sprintLock : raceLock;
+    if (!lockInfo?.isLocked) {
+      setPredictActualResults([]);
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    async function loadActualResults() {
+      try {
+        const { data, error } = await supabase
+          .from('actual_results')
+          .select('race_id, position, driver_id, race_type')
+          .eq('race_id', race.id)
+          .eq('race_type', activeRaceType)
+          .order('position');
+
+        if (!cancelled && !error) {
+          setPredictActualResults(data || []);
+        }
+      } catch (_) {
+        if (!cancelled) setPredictActualResults([]);
+      }
+    }
+
+    loadActualResults();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, activeRaceType, race.id, raceLock, sprintLock]);
+
   const currentSession = sessionsState.sessions.find(
     (session) => String(session.session_key) === String(sessionKey),
   );
@@ -390,6 +426,59 @@ export function RaceDetailModal({ race, onClose, defaultTab = 'predict' }) {
         left.avgPosition - right.avgPosition,
     )[0];
   }, [consensusSnapshot.entries]);
+
+  const predictAccuracy = useMemo(() => {
+    if (!predictActualResults.length) return null;
+
+    const selections = activeRaceType === 'sprint' ? sprintSelections : gpSelections;
+    const userRankings = selections
+      .map((driverId, index) =>
+        driverId
+          ? {
+              race_id: race.id,
+              race_type: activeRaceType,
+              position: index + 1,
+              driver_id: Number(driverId),
+            }
+          : null,
+      )
+      .filter(Boolean);
+
+    if (!userRankings.length) return null;
+
+    const stats = computeAccuracy(userRankings, predictActualResults);
+    if (!stats) return null;
+
+    const actualByPosition = new Map();
+    predictActualResults.forEach((r) => actualByPosition.set(r.position, r.driver_id));
+
+    const actualDriverPos = new Map();
+    predictActualResults.forEach((r) => actualDriverPos.set(r.driver_id, r.position));
+
+    const positions = activeRaceType === 'sprint' ? 8 : 10;
+    const rows = Array.from({ length: positions }, (_, i) => {
+      const pos = i + 1;
+      const predictedDriverId = selections[i] ? Number(selections[i]) : null;
+      const actualDriverId = actualByPosition.get(pos) || null;
+      const isExact = predictedDriverId != null && predictedDriverId === actualDriverId;
+      const actualPos =
+        predictedDriverId != null ? (actualDriverPos.get(predictedDriverId) ?? null) : null;
+      const diff = actualPos != null ? Math.abs(pos - actualPos) : null;
+
+      return { pos, predictedDriverId, actualDriverId, isExact, actualPos, diff };
+    });
+
+    const actualPodiumIds = predictActualResults
+      .filter((r) => r.position >= 1 && r.position <= 3)
+      .map((r) => r.driver_id);
+    const userPodiumIds = selections
+      .slice(0, 3)
+      .filter(Boolean)
+      .map(Number);
+    const podiumHits = userPodiumIds.filter((id) => actualPodiumIds.includes(id)).length;
+
+    return { ...stats, rows, podiumHits };
+  }, [activeRaceType, gpSelections, predictActualResults, race.id, sprintSelections]);
 
   const driverBestLaps = useMemo(() => {
     if (!sessionLaps.length) return [];
@@ -521,42 +610,132 @@ export function RaceDetailModal({ race, onClose, defaultTab = 'predict' }) {
         </div>
       </div>
 
-      <div class="ranking-grid">
-        ${Array.from({ length: positions }, (_, index) => html`<div
-          class="ranking-row"
-          key=${`${raceType}-${index}`}
-        >
-          <span class=${`ranking-position ${index < 3 ? `pos-${index + 1}` : ''}`}>
-            P${index + 1}
-          </span>
-          <${DriverSelect}
-            value=${selections[index]}
-            onChange=${(driverId) => {
-              const nextSelections = [...selections];
-              nextSelections[index] = driverId;
-              setSelections(nextSelections);
-            }}
-            disabledIds=${selectedIds}
-            disabled=${lockInfo.isLocked || savingPredictions}
-            placeholder="Select driver..."
-          />
-        </div>`)}
-      </div>
+      ${lockInfo.isLocked && predictAccuracy && hasSavedSelections
+        ? html`<div class="predict-comparison">
+            <div class="predict-comparison-stats">
+              <div class="rdm-consensus-card rdm-consensus-card-accent">
+                <span class="rdm-consensus-card-label">Accuracy</span>
+                <div class="accuracy-bar-wrapper">
+                  <div class="accuracy-bar">
+                    <div
+                      class="accuracy-bar-fill"
+                      style=${{ width: `${Math.min(predictAccuracy.accuracy, 100)}%` }}
+                    ></div>
+                  </div>
+                  <span class="accuracy-bar-text">${predictAccuracy.accuracy}%</span>
+                </div>
+                <span class="rdm-consensus-card-copy">
+                  ${predictAccuracy.total_correct}/${predictAccuracy.total_predictions} exact
+                </span>
+              </div>
+              <div class="rdm-consensus-card">
+                <span class="rdm-consensus-card-label">Average Miss</span>
+                <strong class="rdm-consensus-card-value">${predictAccuracy.position_diff_avg}</strong>
+                <span class="rdm-consensus-card-copy">Positions off on average</span>
+              </div>
+              <div class="rdm-consensus-card">
+                <span class="rdm-consensus-card-label">Podium Hits</span>
+                <strong class="rdm-consensus-card-value">${predictAccuracy.podiumHits}/3</strong>
+                <span class="rdm-consensus-card-copy">Correct names in top 3</span>
+              </div>
+            </div>
 
-      <div class="prediction-actions">
-        <button class="btn btn-secondary" onClick=${onClose}>Close</button>
-        <button
-          class="btn btn-primary"
-          onClick=${() => handleSavePredictions(raceType)}
-          disabled=${savingPredictions || lockInfo.isLocked}
-        >
-          ${lockInfo.isLocked
-            ? 'Predictions Locked'
-            : savingPredictions
-              ? 'Saving...'
-              : `Save ${isSprint ? 'Sprint' : 'GP'} Picks`}
-        </button>
-      </div>
+            <div class="table-wrapper">
+              <table class="data-table predict-comparison-table">
+                <thead>
+                  <tr>
+                    <th style=${{ width: '46px' }}>Pos</th>
+                    <th>Your Pick</th>
+                    <th>Actual</th>
+                    <th style=${{ width: '46px', textAlign: 'center' }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${predictAccuracy.rows.map((row) => {
+                    const predictedDriver = row.predictedDriverId
+                      ? getDriver(row.predictedDriverId)
+                      : null;
+                    const actualDriver = row.actualDriverId
+                      ? getDriver(row.actualDriverId)
+                      : null;
+
+                    let matchClass = '';
+                    let matchIcon = '';
+                    if (row.isExact) {
+                      matchClass = 'predict-match-exact';
+                      matchIcon = '\u2713';
+                    } else if (row.diff !== null && row.diff === 1) {
+                      matchClass = 'predict-match-close';
+                      matchIcon = '~';
+                    } else if (row.predictedDriverId) {
+                      matchClass = 'predict-match-miss';
+                      matchIcon = row.diff !== null ? `${row.diff}` : '?';
+                    }
+
+                    return html`<tr key=${row.pos} class=${matchClass}>
+                      <td class=${`pos-cell ${row.pos <= 3 ? `pos-${row.pos}` : ''}`}>
+                        P${row.pos}
+                      </td>
+                      <td>
+                        <span class="driver-cell">
+                          ${predictedDriver &&
+                          html`<${TeamDot} teamId=${predictedDriver.team} />`}
+                          <span>${predictedDriver ? getDriverLastName(predictedDriver) : '-'}</span>
+                        </span>
+                      </td>
+                      <td>
+                        <span class="driver-cell">
+                          ${actualDriver && html`<${TeamDot} teamId=${actualDriver.team} />`}
+                          <span>${actualDriver ? getDriverLastName(actualDriver) : '-'}</span>
+                        </span>
+                      </td>
+                      <td class="predict-match-indicator">
+                        ${matchIcon}
+                      </td>
+                    </tr>`;
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>`
+        : html`<div>
+            <div class="ranking-grid">
+              ${Array.from({ length: positions }, (_, index) => html`<div
+                class="ranking-row"
+                key=${`${raceType}-${index}`}
+              >
+                <span class=${`ranking-position ${index < 3 ? `pos-${index + 1}` : ''}`}>
+                  P${index + 1}
+                </span>
+                <${DriverSelect}
+                  value=${selections[index]}
+                  onChange=${(driverId) => {
+                    const nextSelections = [...selections];
+                    nextSelections[index] = driverId;
+                    setSelections(nextSelections);
+                  }}
+                  disabledIds=${selectedIds}
+                  disabled=${lockInfo.isLocked || savingPredictions}
+                  placeholder="Select driver..."
+                />
+              </div>`)}
+            </div>
+
+            <div class="prediction-actions">
+              <button class="btn btn-secondary" onClick=${onClose}>Close</button>
+              <button
+                class="btn btn-primary"
+                onClick=${() => handleSavePredictions(raceType)}
+                disabled=${savingPredictions || lockInfo.isLocked}
+              >
+                ${lockInfo.isLocked
+                  ? 'Predictions Locked'
+                  : savingPredictions
+                    ? 'Saving...'
+                    : `Save ${isSprint ? 'Sprint' : 'GP'} Picks`}
+              </button>
+            </div>
+          </div>`}
     </div>`;
   };
 
@@ -1011,6 +1190,7 @@ export function RaceDetailModal({ race, onClose, defaultTab = 'predict' }) {
                 title="No lap times published"
                 text="This session exists, but OpenF1 does not currently have lap data for it."
               />`}
+
     </div>`;
   };
 

@@ -1,7 +1,8 @@
-import { html, useEffect, useMemo, useState } from '../lib/core.mjs';
+import { html, supabase, useEffect, useMemo, useState } from '../lib/core.mjs';
 import { loadRankingsWithProfiles } from '../lib/app-utils.mjs';
 import {
-  computePowerScores,
+  buildConsensusSnapshot,
+  computeAccuracy,
   getDriver,
   getRace,
   getSeasonContext,
@@ -20,6 +21,7 @@ export function RankingsView() {
   const [selectedRace, setSelectedRace] = useState(() => getSeasonContext().nextRace.id);
   const [raceType, setRaceType] = useState('race');
   const [rankings, setRankings] = useState([]);
+  const [actualResults, setActualResults] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -36,11 +38,23 @@ export function RankingsView() {
       setLoading(true);
       setError('');
       try {
-        const data = await loadRankingsWithProfiles(selectedRace, raceType);
-        if (!cancelled) setRankings(data);
+        const [data, resultsResponse] = await Promise.all([
+          loadRankingsWithProfiles(selectedRace, raceType),
+          supabase
+            .from('actual_results')
+            .select('race_id, position, driver_id, race_type')
+            .eq('race_id', selectedRace)
+            .eq('race_type', raceType)
+            .order('position'),
+        ]);
+        if (!cancelled) {
+          setRankings(data);
+          setActualResults(resultsResponse.data || []);
+        }
       } catch (fetchError) {
         if (!cancelled) {
           setRankings([]);
+          setActualResults([]);
           setError(fetchError.message || 'Unable to load rankings right now.');
         }
       } finally {
@@ -64,8 +78,34 @@ export function RankingsView() {
 
   const users = Object.keys(userRankings);
   const numPositions = raceType === 'sprint' ? 8 : 10;
-  const powerScores = useMemo(
-    () => computePowerScores(rankings, raceType),
+  const hasResults = actualResults.length > 0;
+
+  const userAccuracyMap = useMemo(() => {
+    if (!hasResults) return {};
+
+    const map = {};
+    const byUser = {};
+
+    rankings.forEach((ranking) => {
+      if (!byUser[ranking._username]) byUser[ranking._username] = [];
+      byUser[ranking._username].push({
+        race_id: selectedRace,
+        race_type: raceType,
+        position: ranking.position,
+        driver_id: Number(ranking.driver_id),
+      });
+    });
+
+    Object.entries(byUser).forEach(([username, userPicks]) => {
+      const result = computeAccuracy(userPicks, actualResults);
+      map[username] = result;
+    });
+
+    return map;
+  }, [actualResults, hasResults, rankings, raceType, selectedRace]);
+
+  const consensusSnapshot = useMemo(
+    () => buildConsensusSnapshot(rankings, raceType),
     [rankings, raceType],
   );
 
@@ -127,73 +167,106 @@ export function RankingsView() {
                       ${Array.from({ length: numPositions }, (_, index) => html`<th key=${index}>
                         P${index + 1}
                       </th>`)}
+                      <th style=${{ textAlign: 'right' }}>Accuracy</th>
                     </tr>
                   </thead>
                   <tbody>
-                    ${users.map((user) => html`<tr key=${user}>
-                      <td>
-                        <${UsernameLink}
-                          username=${user}
-                          displayName=${userDisplayNames[user]}
-                        />
-                      </td>
-                      ${Array.from({ length: numPositions }, (_, index) => {
-                        const driverId = userRankings[user][index + 1];
-                        const driver = driverId ? getDriver(driverId) : null;
+                    ${users.map((user) => {
+                      const accuracy = userAccuracyMap[user];
 
-                        return html`<td key=${index}>
-                          ${driver
-                            ? html`<span class="driver-cell">
-                                <${TeamDot} teamId=${driver.team} size=${8} />
-                                <span style=${{ fontSize: 'var(--text-xs)' }}>
-                                  ${driver.name.split(' ').pop()}
-                                </span>
+                      return html`<tr key=${user}>
+                        <td>
+                          <${UsernameLink}
+                            username=${user}
+                            displayName=${userDisplayNames[user]}
+                          />
+                        </td>
+                        ${Array.from({ length: numPositions }, (_, index) => {
+                          const driverId = userRankings[user][index + 1];
+                          const driver = driverId ? getDriver(driverId) : null;
+
+                          return html`<td key=${index}>
+                            ${driver
+                              ? html`<span class="driver-cell">
+                                  <${TeamDot} teamId=${driver.team} size=${8} />
+                                  <span style=${{ fontSize: 'var(--text-xs)' }}>
+                                    ${driver.name.split(' ').pop()}
+                                  </span>
+                                </span>`
+                              : html`<span style=${{ color: 'var(--color-text-faint)' }}>-</span>`}
+                          </td>`;
+                        })}
+                        <td style=${{ textAlign: 'right' }}>
+                          ${accuracy
+                            ? html`<span class="rankings-accuracy-badge">
+                                ${accuracy.accuracy}%
                               </span>`
-                            : html`<span style=${{ color: 'var(--color-text-faint)' }}>-</span>`}
-                        </td>`;
-                      })}
-                    </tr>`)}
+                            : html`<span style=${{
+                                color: 'var(--color-text-faint)',
+                                fontSize: 'var(--text-xs)',
+                              }}>
+                                Pending
+                              </span>`}
+                        </td>
+                      </tr>`;
+                    })}
                   </tbody>
                 </table>
               </div>
 
-              ${powerScores.length > 0 &&
+              ${consensusSnapshot.entries.length > 0 &&
               html`<div class="consensus-section">
                 <h3 class="consensus-title">
                   Consensus Power Rankings${raceType === 'sprint' ? ' - Sprint' : ''}
                 </h3>
                 <p class="consensus-copy">
-                  A score of 1000 means every submitted ballot ranked that driver first.
+                  Power is normalized to 100 using official F1 points from every submitted ballot.
+                  ${consensusSnapshot.ballotCount} ballot${consensusSnapshot.ballotCount !== 1 ? 's' : ''} submitted.
                 </p>
                 <div class="power-rankings-list">
-                  ${powerScores.map((entry, index) => {
-                    const driver = getDriver(entry.driverId);
-                    const team = driver ? getTeam(driver.team) : null;
-                    const barWidth = (entry.score / 1000) * 100;
+                  ${consensusSnapshot.entries
+                    .slice(0, consensusSnapshot.positionsLimit)
+                    .map((entry, index) => {
+                      const driver = getDriver(entry.driverId);
+                      const team = driver ? getTeam(driver.team) : null;
+                      const barWidth = Math.max(entry.powerRating, 4);
 
-                    return html`<div key=${entry.driverId} class="power-rank-row">
-                      <div class="power-rank-pos">
-                        <span class=${`power-rank-num ${index < 3 ? `power-top-${index + 1}` : ''}`}>
-                          ${index + 1}
-                        </span>
-                      </div>
-                      <div class="power-rank-driver">
-                        ${team && html`<${TeamDot} teamId=${driver.team} size=${10} />`}
-                        <span class="power-rank-name">${driver ? driver.name : 'Unknown'}</span>
-                        <span class="power-rank-team">${team ? team.name : ''}</span>
-                      </div>
-                      <div class="power-rank-bar-wrapper">
-                        <div
-                          class="power-rank-bar"
-                          style=${{
-                            width: `${barWidth}%`,
-                            background: team ? team.color : 'var(--color-primary)',
-                          }}
-                        ></div>
-                      </div>
-                      <div class="power-rank-score">${entry.score}</div>
-                    </div>`;
-                  })}
+                      return html`<div key=${entry.driverId} class="power-rank-row">
+                        <div class="power-rank-pos">
+                          <span class=${`power-rank-num ${index < 3 ? `power-top-${index + 1}` : ''}`}>
+                            ${index + 1}
+                          </span>
+                        </div>
+                        <div class="power-rank-driver">
+                          ${team && html`<${TeamDot} teamId=${driver.team} size=${10} />`}
+                          <span class="power-rank-name">${driver ? driver.name : 'Unknown'}</span>
+                          <span class="power-rank-team">${team ? team.name : ''}</span>
+                        </div>
+                        <div class="power-rank-bar-wrapper">
+                          <div
+                            class="power-rank-bar"
+                            style=${{
+                              width: `${barWidth}%`,
+                              background: team ? team.color : 'var(--color-primary)',
+                            }}
+                          ></div>
+                        </div>
+                        <div class="power-rank-metrics">
+                          <span class="power-rank-metric" title="Power rating">
+                            ${entry.powerRating.toFixed(1)}
+                          </span>
+                          <span class="power-rank-metric" title="Podium share">
+                            ${entry.podiumShare}% pod
+                          </span>
+                          <span class="power-rank-metric" title="Win share">
+                            ${entry.winShare}% win
+                          </span>
+                          <span class="power-rank-metric" title="Average predicted position">
+                            P${entry.avgPosition !== null ? entry.avgPosition : '-'}
+                          </span>
+                        </div>
+                      </div>`;
+                    })}
                 </div>
               </div>`}
             </div>`}

@@ -861,6 +861,34 @@ export function LiveDashboard() {
 
     return [...counts.entries()].sort((left, right) => right[1] - left[1]);
   }, [timingTower]);
+  const recentPits = useMemo(() => {
+    if (!pits.length) return [];
+
+    return [...pits]
+      .sort(
+        (left, right) =>
+          new Date(right.date || 0).getTime() - new Date(left.date || 0).getTime(),
+      )
+      .slice(0, 5)
+      .map((pit) => {
+        const openF1Driver = driverMap[pit.driver_number];
+        const localDriver = getDriverByNumber(pit.driver_number);
+        const team = localDriver ? getTeam(localDriver.team) : null;
+
+        return {
+          displayName:
+            openF1Driver?.name_acronym ||
+            (openF1Driver?.name
+              ? openF1Driver.name.split(' ').pop().slice(0, 3).toUpperCase()
+              : localDriver
+                ? localDriver.name.split(' ').pop().slice(0, 3).toUpperCase()
+                : `#${pit.driver_number}`),
+          teamColor: openF1Driver?.teamColor || team?.color || '#555',
+          lapNumber: pit.lap_number || null,
+          duration: pit.pit_duration ?? pit.duration ?? pit.lane_time ?? null,
+        };
+      });
+  }, [driverMap, pits]);
 
   const handleManualRefresh = async () => {
     const session = sessions.find(
@@ -1261,6 +1289,39 @@ export function LiveDashboard() {
                 : html`<div class="race-control-insight-meta">Tyre compounds will appear once stint data publishes.</div>`}
             </div>
           </div>
+
+          ${recentPits.length > 0 &&
+          html`<div class="rc-recent-pits">
+            <div class="rc-recent-pits-header">Recent Pit Stops</div>
+            <table class="rc-recent-pits-table">
+              <thead>
+                <tr>
+                  <th>Driver</th>
+                  <th style=${{ textAlign: 'right' }}>Lap</th>
+                  <th style=${{ textAlign: 'right' }}>Duration</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${recentPits.map((pit, index) => html`<tr key=${index}>
+                  <td>
+                    <span class="rc-pit-driver">
+                      <span
+                        class="timing-driver-color"
+                        style=${{ background: pit.teamColor }}
+                      ></span>
+                      ${pit.displayName}
+                    </span>
+                  </td>
+                  <td style=${{ textAlign: 'right' }}>
+                    ${pit.lapNumber || '-'}
+                  </td>
+                  <td style=${{ textAlign: 'right' }}>
+                    ${formatStopDuration(pit.duration)}
+                  </td>
+                </tr>`)}
+              </tbody>
+            </table>
+          </div>`}
         </div>
       </div>
       <div class="live-panel panel-stints">
